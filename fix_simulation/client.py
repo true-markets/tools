@@ -21,7 +21,7 @@ logging.basicConfig(
 # Instrument details from TrueX API
 INSTRUMENT = {
     "symbol": "BTC-PYUSD",
-    "quote_increment": 0.01,
+    "quote_increment": 0.5,
     "base_increment": 0.0001,
     "reference_price": 10000
 }

@@ -7,7 +7,7 @@ import time
 
 import quickfix as fix
 
-from client import Application
+from client import Application, INSTRUMENT
 
 
 class SimulatedTradingApplication(Application):
@@ -34,11 +34,26 @@ class SimulatedTradingApplication(Application):
 
     @staticmethod
     def generate_simulated_order_params():
-        # Generate a price in the range 9999.00 to 10001.00 with increments of 0.01
-        price = round(random.randint(999900, 1000100) / 100.0, 2)
+        # Generate a price within ±1% of the reference price, using quote_increment
+        price_range = INSTRUMENT["reference_price"] * 0.01  # 1% of reference price
+        min_price = INSTRUMENT["reference_price"] - price_range
+        max_price = INSTRUMENT["reference_price"] + price_range
 
-        # Generate a quantity in the range 0.2 to 0.3 with increments of 0.0001
-        quantity = round(random.randint(2000, 3000) / 10000.0, 4)
+        # Calculate the number of possible price points
+        price_steps = round((max_price - min_price) / INSTRUMENT["quote_increment"])
+
+        # Generate a random price within the range
+        random_step = random.randint(0, price_steps)
+        price = round(min_price + (random_step * INSTRUMENT["quote_increment"]), 2)
+
+        # Ensure the price doesn't exceed max_price due to rounding
+        price = min(price, max_price)
+
+        # Generate a quantity between 0.2 and 0.3, using base_increment
+        min_quantity = 0.2
+        max_quantity = 0.3
+        quantity_steps = int((max_quantity - min_quantity) / INSTRUMENT["base_increment"])
+        quantity = round(min_quantity + (random.randint(0, quantity_steps) * INSTRUMENT["base_increment"]), 4)
 
         return price, quantity
 
