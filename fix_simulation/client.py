@@ -351,8 +351,6 @@ class Application(fix.Application):
         message.setField(fix.Symbol(INSTRUMENT["symbol"]))
         message.setField(fix.Side(side))
         message.setField(fix.TransactTime())
-        # transact_time = datetime.utcnow().strftime('%Y%m%d-%H:%M:%S.%f')[:-3]  # UTC time with milliseconds
-        # message.setField(fix.TransactTime(transact_time))
         message.setField(fix.OrdType(order_type))
         message.setField(fix.Price(price))
         message.setField(fix.OrderQty(quantity))
@@ -370,9 +368,6 @@ class Application(fix.Application):
         logging.info("Order placed - ClientID: %s, OrderID: %s, Price: %s, Quantity: %s, Side: %s, OrderType: %s",
                      self.clientId, self.lastClOrdId, price, quantity, side_str, order_type_str)
         self.lastClOrdId = cl_ord_id
-
-        transact_time = message.getField(fix.TransactTime())
-        logging.info(f"TransactTime set to: %s", transact_time)
         get_client_balance(self.apiKeyId, self.apiKeySecret, self.clientId)
 
     # Cancel the last order placed
