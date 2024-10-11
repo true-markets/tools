@@ -18,7 +18,7 @@ services:
       - TRUEX_USER2_MNEMONIC=${TRUEX_USER2_MNEMONIC}
       - TRUEX_USER2_KEY_ID=${TRUEX_USER2_KEY_ID}
       - TRUEX_USER2_KEY_SECRET=${TRUEX_USER2_KEY_SECRET}
-      - TRUEX_API_ADDRESS=http://10.10.10.11:9742
+      - TRUEX_API_ADDRESS=http://10.10.10.11:10185
     command: ["python3", "trade_simulation.py"]
     stdin_open: true
     tty: true

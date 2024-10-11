@@ -124,6 +124,48 @@ def get_client_id(api_key_id, api_key_secret, mnemonic):
     return matching_id
 
 
+def get_client_balance(api_key_id, api_key_secret, client_id):
+    logging.info("Getting client balance %s", client_id)
+    header_auth_timestamp = "x-truex-auth-timestamp"
+    header_auth_signature = "x-truex-auth-signature"
+    header_auth_token = "x-truex-auth-token"
+    header_client_id = "x-truex-auth-user-id"
+
+    address = os.getenv("TRUEX_API_ADDRESS")
+    url = f"{address}/api/v1/balance"
+
+    auth_timestamp = str(int(time.time()))
+    http_method = "GET"
+
+    # Generate payload for HMAC signature using auth timestamp and HTTP method
+    parsed_url = urlparse(url)
+    path = parsed_url.path
+    payload = auth_timestamp + http_method + path
+
+    # Generate HMAC signature using API key secret and payload
+    hmac_key = api_key_secret.encode('utf-8')
+    hmac_message = payload.encode('utf-8')
+    hmac_digest = hmac.new(hmac_key, hmac_message, hashlib.sha256).digest()
+
+    # Base64 encode the HMAC digest to generate the auth signature
+    auth_signature = base64.b64encode(hmac_digest).decode('utf-8')
+
+    # Set headers for the request including the auth timestamp, auth signature, and API key ID
+    headers = {
+        header_auth_timestamp: auth_timestamp,
+        header_auth_signature: auth_signature,
+        header_auth_token: api_key_id,
+        header_client_id: client_id,
+        "Content-Type": "application/json"
+    }
+
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        logging.info("Success: %s", response.json())
+    else:
+        logging.info("Failed with status code %s: %s", response.status_code, response.text)
+
 class Application(fix.Application):
     def __init__(self, api_key_id, api_key_secret, mnemonic):
         super().__init__()
@@ -154,7 +196,7 @@ class Application(fix.Application):
 
         if msg_type.getValue() == fix.MsgType_Logon:
             self.sessionId = None
-            logging.info("Logging on clientId: %s", self.clientId)
+            logging.info("Logging on user: %s", self.mnemonic)
 
             sending_time = datetime.utcnow().strftime('%Y%m%d-%H:%M:%S.%f')[:-3]
             msg_type = message.getHeader().getField(fix.MsgType()).getString()
@@ -309,6 +351,8 @@ class Application(fix.Application):
         message.setField(fix.Symbol(INSTRUMENT["symbol"]))
         message.setField(fix.Side(side))
         message.setField(fix.TransactTime())
+        # transact_time = datetime.utcnow().strftime('%Y%m%d-%H:%M:%S.%f')[:-3]  # UTC time with milliseconds
+        # message.setField(fix.TransactTime(transact_time))
         message.setField(fix.OrdType(order_type))
         message.setField(fix.Price(price))
         message.setField(fix.OrderQty(quantity))
@@ -326,6 +370,10 @@ class Application(fix.Application):
         logging.info("Order placed - ClientID: %s, OrderID: %s, Price: %s, Quantity: %s, Side: %s, OrderType: %s",
                      self.clientId, self.lastClOrdId, price, quantity, side_str, order_type_str)
         self.lastClOrdId = cl_ord_id
+
+        transact_time = message.getField(fix.TransactTime())
+        logging.info(f"TransactTime set to: %s", transact_time)
+        get_client_balance(self.apiKeyId, self.apiKeySecret, self.clientId)
 
     # Cancel the last order placed
     def cancel_order(self, session_id):
