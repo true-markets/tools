@@ -69,9 +69,18 @@ ORDER_STATUS_MAP = {
     "E": "Pending Replace"
 }
 
-
-# Retrieves client ID from TrueX API using the provided API key ID, API key secret, and mnemonic
 def get_client_id(api_key_id, api_key_secret, mnemonic):
+    """
+    Retrieves the client ID from the TrueX API using the provided API key ID, API key secret, and mnemonic.
+
+    Args:
+        api_key_id (str): The API key ID for authentication.
+        api_key_secret (str): The API key secret for generating the HMAC signature.
+        mnemonic (str): The mnemonic to match against the client information.
+
+    Returns:
+        str: The matching client ID if found, otherwise None.
+    """
     header_auth_timestamp = "x-truex-auth-timestamp"
     header_auth_signature = "x-truex-auth-signature"
     header_auth_token = "x-truex-auth-token"
@@ -125,6 +134,17 @@ def get_client_id(api_key_id, api_key_secret, mnemonic):
 
 
 def get_client_balance(api_key_id, api_key_secret, client_id):
+    """
+    Retrieves the balance for a specific client from the TrueX API.
+
+    Args:
+        api_key_id (str): The API key ID for authentication.
+        api_key_secret (str): The API key secret for generating the HMAC signature.
+        client_id (str): The client ID whose balance is to be retrieved.
+
+    Returns:
+        None: Logs the balance information or error message.
+    """
     logging.info("Getting client balance %s", client_id)
     header_auth_timestamp = "x-truex-auth-timestamp"
     header_auth_signature = "x-truex-auth-signature"
@@ -368,7 +388,6 @@ class Application(fix.Application):
         logging.info("Order placed - ClientID: %s, OrderID: %s, Price: %s, Quantity: %s, Side: %s, OrderType: %s",
                      self.clientId, self.lastClOrdId, price, quantity, side_str, order_type_str)
         self.lastClOrdId = cl_ord_id
-        get_client_balance(self.apiKeyId, self.apiKeySecret, self.clientId)
 
     # Cancel the last order placed
     def cancel_order(self, session_id):
