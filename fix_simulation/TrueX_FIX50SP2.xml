@@ -205,7 +205,7 @@
   <field number='16' name='EndSeqNo' type='SEQNUM' />
   <field number='34' name='MsgSeqNum' type='SEQNUM' />
   <field number='36' name='NewSeqNo' type='SEQNUM' />
-  <field number='43' name='PossDupFlag' type='BOOLEAN'>
+  <field number='43' name='PossDupFlag' type='CHAR'>
    <value enum='N' description='NO' />
    <value enum='Y' description='YES' />
   </field>
@@ -213,14 +213,18 @@
   <field number='49' name='SenderCompID' type='STRING' />
   <field number='52' name='SendingTime' type='UTCTIMESTAMP' />
   <field number='56' name='TargetCompID' type='STRING' />
-  <field number='97' name='PossResend' type='BOOLEAN'>
+  <field number='97' name='PossResend' type='CHAR'>
    <value enum='N' description='NO' />
    <value enum='Y' description='YES' />
   </field>
   <field number='108' name='HeartBtInt' type='INT' />
   <field number='112' name='TestReqID' type='STRING' />
   <field number='122' name='OrigSendingTime' type='UTCTIMESTAMP' />
-  <field number='123' name='GapFillFlag' type='BOOLEAN'>
+  <field number='123' name='GapFillFlag' type='CHAR'>
+   <value enum='N' description='NO' />
+   <value enum='Y' description='YES' />
+  </field>
+  <field number='141' name='ResetSeqNumFlag' type='BOOLEAN'>
    <value enum='N' description='NO' />
    <value enum='Y' description='YES' />
   </field>
@@ -325,6 +329,15 @@
    <value enum='3' description='IMMEDIATE_OR_CANCEL' />
   </field>
   <field number='60' name='TransactTime' type='UTCTIMESTAMP' />
+  <field number='98' name='EncryptMethod' type='INT'>
+   <value enum='0' description='NONE_OTHER' />
+   <value enum='1' description='PKCS' />
+   <value enum='2' description='DES' />
+   <value enum='3' description='PKCSDES' />
+   <value enum='4' description='PGPDES' />
+   <value enum='5' description='PGPDESMD5' />
+   <value enum='6' description='PEMDESMD5' />
+  </field>
   <field number='102' name='CxlRejReason' type='INT'>
    <value enum='0' description='TOO_LATE_TO_CANCEL' />
    <value enum='1' description='UNKNOWN_ORDER' />
@@ -422,6 +435,7 @@
   </field>
   <field number='561' name='RoundLot' type='QTY' />
   <field number='851' name='LastLiquidityInd' type='INT'>
+   <value enum='0' description='UNKNOWN_LIQUIDITY' />
    <value enum='1' description='ADDED_LIQUIDITY' />
    <value enum='2' description='REMOVED_LIQUIDITY' />
   </field>
@@ -431,7 +445,7 @@
    <value enum='41' description='AVERAGE_DAILY_NUMBER_TRADES' />
   </field>
   <field number='872' name='InstrAttribValue' type='STRING' />
-  <field number='893' name='LastFragment' type='BOOLEAN'>
+  <field number='893' name='LastFragment' type='CHAR'>
    <value enum='N' description='NO' />
    <value enum='Y' description='YES' />
   </field>

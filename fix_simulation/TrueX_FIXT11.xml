@@ -38,7 +38,9 @@
    <field name='Text' required='N' />
   </message>
   <message name='Logon' msgtype='A' msgcat='admin'>
+   <field name='EncryptMethod' required='N' />
    <field name='HeartBtInt' required='Y' />
+   <field name='ResetSeqNumFlag' required='N' />
    <field name='Username' required='N' />
    <field name='Password' required='N' />
    <field name='DefaultApplVerID' required='Y' />
@@ -73,10 +75,23 @@
    <value enum='N' description='NO' />
    <value enum='Y' description='YES' />
   </field>
+  <field number='98' name='EncryptMethod' type='INT'>
+   <value enum='0' description='NONE_OTHER' />
+   <value enum='1' description='PKCS' />
+   <value enum='2' description='DES' />
+   <value enum='3' description='PKCSDES' />
+   <value enum='4' description='PGPDES' />
+   <value enum='5' description='PGPDESMD5' />
+   <value enum='6' description='PEMDESMD5' />
+  </field>
   <field number='108' name='HeartBtInt' type='INT' />
   <field number='112' name='TestReqID' type='STRING' />
   <field number='122' name='OrigSendingTime' type='UTCTIMESTAMP' />
   <field number='123' name='GapFillFlag' type='BOOLEAN'>
+   <value enum='N' description='NO' />
+   <value enum='Y' description='YES' />
+  </field>
+  <field number='141' name='ResetSeqNumFlag' type='BOOLEAN'>
    <value enum='N' description='NO' />
    <value enum='Y' description='YES' />
   </field>
@@ -119,4 +134,4 @@
    <value enum='8' description='PASSWORD_EXPIRED' />
   </field>
  </fields>
-</fix> 
+</fix>
