@@ -43,7 +43,7 @@ Replace `TRUEX_API_ADDRESS` in `docker-compose.yml` with the appropriate value f
 If you encounter any issues with permissions or file access, ensure that the necessary files are in the correct locations and have the proper permissions.
 Check the logs for any error messages that might indicate configuration issues or connection problems.
 
-To exit the container and stop the simulation, press `Ctrl+C` in the terminal where the `docker-compose up` command was run. <br>
+To exit the container and stop the simulation, run `docker stop truex_fix_trade_simulation` in a separate terminal window or press `Ctrl+C` in the terminal where the `docker-compose up` command was run. <br>
 Might have to update the SENDER_COMP_ID after each restart of the container, as the fix session might not have logged out properly.
 
 Additional Information

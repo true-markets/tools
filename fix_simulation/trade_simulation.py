@@ -2,6 +2,7 @@ import logging
 import os
 import random
 import shutil
+import signal
 import threading
 import time
 
@@ -125,6 +126,16 @@ def main():
 
     user_numbers = ['1', '2']
     running_clients = []
+    stop_event = threading.Event()
+
+    def signal_handler(signum, frame):
+        sig_name = signal.Signals(signum).name
+        logging.info(f"\nCaught signal {signum} ({sig_name}), initiating shutdown...")
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
 
     for user_number in user_numbers:
         app, initiator = run_simulated_trading_client(user_number)
@@ -133,16 +144,24 @@ def main():
 
     if running_clients:
         try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            logging.info("\nCaught KeyboardInterrupt, shutting down...")
+            while not stop_event.is_set():
+                stop_event.wait(1)
         finally:
+            logging.info("Shutting down simulation...")
+
+            # Wait for all logouts to complete
             for app, initiator in running_clients:
                 app.send_logout()
-                initiator.stop()
+                if app.wait_for_logout(timeout=10):
+                    logging.info(f"Logout completed for client {app.mnemonic}")
+                else:
+                    logging.warning(f"Logout timed out for client {app.mnemonic}")
+                initiator.stop(True)  # True means wait for stop to complete
+
+            logging.info("All clients have been shut down.")
     else:
         logging.info("Failed to start any clients.")
+
 
 if __name__ == '__main__':
     main()
