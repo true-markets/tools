@@ -12,17 +12,17 @@ This project contains a simulated trading application that interacts with a FIX 
 3. Create a `.env` file in the root directory of the project with the following content:
 
 ```
-TRUEX_USER1_MNEMONIC=your_user1_mnemonic
-TRUEX_USER1_KEY_ID=your_user1_key_id
-TRUEX_USER1_KEY_SECRET=your_user1_key_secret
-TRUEX_USER2_MNEMONIC=your_user2_mnemonic
-TRUEX_USER2_KEY_ID=your_user2_key_id
-TRUEX_USER2_KEY_SECRET=your_user2_key_secret
+TRUEX_CLIENT_MNEMONICS=your_client_mnemonics (comma-separated)
+TRUEX_CLIENT_API_KEY_ID=your_client_api_key_id
+TRUEX_CLIENT_API_KEY_SECRET=your_client_api_key_secret
 ```
 
-Replace the placeholder values with your actual credentials.
+Replace the placeholder values with your actual credentials.<br>
+The `TRUEX_CLIENT_MNEMONICS` should be a comma-separated list of client mnemonics that you want to use for the simulation. e.g client1,client2<br>
+The `TRUEX_CLIENT_API_KEY_ID` and `TRUEX_CLIENT_API_KEY_SECRET` are the API key ID and secret for the clients.
+For the simulation, use the same API key and secret for both clients.
+The client mnemonics must be registered clients in the TRUEX system and have the necessary permissions to access the FIX server.
 
-3. Ensure that the `client1.cfg` and `client2.cfg` files are present and correctly configured.
 
 ## Running the Trade Simulation
 To run the trade simulation using Docker Compose:
