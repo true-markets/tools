@@ -79,14 +79,14 @@ def get_client_id(api_key_id, api_key_secret, mnemonic):
         mnemonic (str): The mnemonic to match against the client information.
 
     Returns:
-        str: The matching client ID if found, otherwise None.
+        str: The client ID if found, otherwise None.
     """
     header_auth_timestamp = "x-truex-auth-timestamp"
     header_auth_signature = "x-truex-auth-signature"
     header_auth_token = "x-truex-auth-token"
 
     address = os.getenv("TRUEX_API_ADDRESS")
-    url = f"{address}/api/v1/client"
+    url = f"{address}/api/v1/client?mnemonic={mnemonic}"
 
     auth_timestamp = str(int(time.time()))
     http_method = "GET"
@@ -115,22 +115,12 @@ def get_client_id(api_key_id, api_key_secret, mnemonic):
     response = requests.get(url, headers=headers)
 
     if response.status_code == 200:
-        logging.info("Success: %s", response.json())
+        logging.info("Success retrieving clientID for mnemonic: %s", mnemonic)
+        return response.json()[0]["id"]
     else:
-        logging.info("Failed with status code %s: %s", response.status_code, response.text)
-
-    # Find the client ID that matches the provided mnemonic
-    matching_id = None
-    for entry in response.json():
-        if entry['info']['mnemonic'] == mnemonic:
-            matching_id = entry['id']
-            break
-
-    if matching_id:
-        logging.info("Found matching ID: %s", matching_id)
-    else:
-        logging.info("No matching mnemonic found.")
-    return matching_id
+        logging.info("Failed to retrieve clientID for mnemonic: %s with status code %s: %s", mnemonic,
+                     response.status_code, response.text)
+        return None
 
 
 def get_client_balance(api_key_id, api_key_secret, client_id):
@@ -205,6 +195,9 @@ class Application(fix.Application):
         logging.info("Logon successful: session: %s, client: %s", session_id, self.mnemonic)
         self.sessionId = session_id
         self.clientId = get_client_id(self.apiKeyId, self.apiKeySecret, self.mnemonic)
+        if not self.clientId:
+            logging.error("Client ID not found for mnemonic: %s, logging out", self.mnemonic)
+            self.send_logout()
 
     def onLogout(self, session_id):
         logging.info("Logout succesful: session: %s, client: %s", session_id, self.mnemonic)

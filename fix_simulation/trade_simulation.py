@@ -20,9 +20,11 @@ class SimulatedTradingApplication(Application):
         self.start_simulation()
 
     def start_simulation(self):
+        """Start a new thread to run the trading simulation."""
         threading.Thread(target=self.simulation_loop, daemon=True).start()
 
     def simulation_loop(self):
+        """Simulate trading actions in a loop with random delays."""
         while True:
             action = random.choices(['place', 'modify', 'cancel'], weights=[70, 20, 10])[0]
             if action == 'place':
@@ -31,12 +33,12 @@ class SimulatedTradingApplication(Application):
                 self.simulate_order_modification()
             else:
                 self.simulate_order_cancellation()
-            time.sleep(random.uniform(10, 15))  # Wait 10-15 seconds between actions
+            time.sleep(random.uniform(7, 10))  # Wait 10-15 seconds between actions
 
     @staticmethod
     def generate_simulated_order_params():
-        # Generate a price within ±1% of the reference price, using quote_increment
-        price_range = INSTRUMENT["reference_price"] * 0.01  # 1% of reference price
+        """Generate random parameters for a new order within valid price/quantity ranges."""
+        price_range = INSTRUMENT["reference_price"] * 0.001  # 0.1% of reference price
         min_price = INSTRUMENT["reference_price"] - price_range
         max_price = INSTRUMENT["reference_price"] + price_range
 
@@ -59,6 +61,7 @@ class SimulatedTradingApplication(Application):
         return price, quantity
 
     def simulate_new_order(self):
+        """Simulate placing a new order."""
         side = random.choice([fix.Side_BUY, fix.Side_SELL])
         order_type = random.choices([fix.OrdType_LIMIT, fix.OrdType_MARKET], weights=[70, 30])[0]
         price, quantity = self.generate_simulated_order_params()
@@ -66,6 +69,7 @@ class SimulatedTradingApplication(Application):
         self.send_order(self.sessionId, side, price, quantity, order_type)
 
     def simulate_order_modification(self):
+        """Simulate modifying an existing order."""
         if not self.lastClOrdId:
             return  # No order to modify
 
@@ -86,60 +90,75 @@ class SimulatedTradingApplication(Application):
         self.modify_order(self.sessionId, new_price, new_quantity, new_order_type)
 
     def simulate_order_cancellation(self):
+        """Simulate canceling an order."""
         if not self.lastClOrdId:
             return  # No order to cancel
         self.cancel_order(self.sessionId)
 
-def run_simulated_trading_client(user_number):
-    config_file = f'client{user_number}.cfg'
-    api_key_id = os.getenv(f"TRUEX_USER{user_number}_KEY_ID")
-    api_key_secret = os.getenv(f"TRUEX_USER{user_number}_KEY_SECRET")
-    mnemonic = os.getenv(f"TRUEX_USER{user_number}_MNEMONIC")
+
+def load_config_and_settings(config_file):
+    """Load the configuration and session settings from the config file."""
+    settings = fix.SessionSettings(config_file)
+    default_settings = settings.get()
+    begin_str = default_settings.getString(fix.BEGINSTRING)
+    target_comp_id = default_settings.getString(fix.TARGETCOMPID)
+    return settings, begin_str, target_comp_id
+
+
+def run_simulated_trading_client(mnemonic):
+    """Initialize and run a simulated trading client."""
+    config_file = 'client.cfg'
+    api_key_id = os.getenv("TRUEX_CLIENT_API_KEY_ID")
+    api_key_secret = os.getenv("TRUEX_CLIENT_API_KEY_SECRET")
+
+    if not api_key_id or not api_key_secret:
+        logging.error("API key ID or secret not set.")
+        return None, None
 
     try:
-        settings = fix.SessionSettings(config_file)
+        settings, begin_str, target_comp_id = load_config_and_settings(config_file)
+        # Create a session ID with the given mnemonic
+        session_id = fix.SessionID(begin_str, f"{mnemonic}_8", target_comp_id)
+        settings.set(session_id, fix.Dictionary())
+
         application = SimulatedTradingApplication(api_key_id, api_key_secret, mnemonic)
-        # Use MemoryStoreFactory instead of FileStoreFactory to avoid storing session state
         store_factory = fix.MemoryStoreFactory()
-        log_factory = fix.FileLogFactory(settings)
+        log_factory = fix.FileLogFactory(f"log/{mnemonic}")
         initiator = fix.SocketInitiator(application, store_factory, settings, log_factory)
 
         initiator.start()
         return application, initiator
+
     except (fix.ConfigError, fix.RuntimeError) as e:
-        logging.info("Error starting client with config %s: %s", config_file, e)
+        logging.error("Error starting client with config %s: %s", config_file, e)
         return None, None
 
 
-# Cleanup function to remove `log` folder
-def cleanup():
-    current_directory = os.getcwd()
-    for folder_name in os.listdir(current_directory):
-        if os.path.isdir(folder_name) and (folder_name.startswith('log')):
-            # Remove the directory and all its contents
-            shutil.rmtree(folder_name)
-            print(f"Removed folder: {folder_name}")
+def cleanup_logs():
+    """Cleanup log directories before running the simulation."""
+    log_dirs = [folder for folder in os.listdir(os.getcwd()) if os.path.isdir(folder) and folder.startswith('log')]
+    for log_dir in log_dirs:
+        shutil.rmtree(log_dir)
+        logging.info(f"Removed folder: {log_dir}")
+
+
+def handle_shutdown(signum, frame, stop_event):
+    """Handle graceful shutdown on receiving a signal."""
+    logging.info(f"Received signal {signal.Signals(signum).name}, initiating shutdown...")
+    stop_event.set()
 
 
 def main():
-    cleanup()
+    cleanup_logs()
 
-    user_numbers = ['1', '2']
-    running_clients = []
     stop_event = threading.Event()
+    signal.signal(signal.SIGINT, lambda s, f: handle_shutdown(s, f, stop_event))
+    signal.signal(signal.SIGTERM, lambda s, f: handle_shutdown(s, f, stop_event))
 
-    def signal_handler(signum, frame):
-        sig_name = signal.Signals(signum).name
-        logging.info(f"\nCaught signal {signum} ({sig_name}), initiating shutdown...")
-        stop_event.set()
+    mnemonics = os.getenv("TRUEX_CLIENT_MNEMONICS", "").split(",")
+    running_clients = [run_simulated_trading_client(mnemonic) for mnemonic in mnemonics]
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    for user_number in user_numbers:
-        app, initiator = run_simulated_trading_client(user_number)
-        if app and initiator:
-            running_clients.append((app, initiator))
+    running_clients = [(app, initiator) for app, initiator in running_clients if app and initiator]
 
     if running_clients:
         try:
@@ -149,8 +168,7 @@ def main():
             logging.info("Shutting down simulation...")
             for app, initiator in running_clients:
                 app.send_logout()
-                initiator.stop(True)  # True means wait for stop to complete
-
+                initiator.stop(True)
             logging.info("All clients have been shut down.")
     else:
         logging.info("Failed to start any clients.")
