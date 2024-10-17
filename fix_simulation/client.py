@@ -3,7 +3,6 @@ import hashlib
 import hmac
 import logging
 import os
-import threading
 import time
 import uuid
 from datetime import datetime
@@ -194,24 +193,21 @@ class Application(fix.Application):
         self.lastClOrdId = None
         self.orderIdCounter = 0
         self.clientId = None
-        self.sessionID = None
+        self.sessionId = None
         self.mnemonic = mnemonic
         self.apiKeyId = api_key_id
         self.apiKeySecret = api_key_secret
-        self.logout_complete = threading.Event()
 
     def onCreate(self, session_id):
         logging.info("Session created: %s", session_id)
 
     def onLogon(self, session_id):
-        logging.info("Logon successful: %s", session_id)
-        self.sessionID = session_id
-        # TODO handle case client id is not found
+        logging.info("Logon successful: session: %s, client: %s", session_id, self.mnemonic)
+        self.sessionId = session_id
         self.clientId = get_client_id(self.apiKeyId, self.apiKeySecret, self.mnemonic)
 
     def onLogout(self, session_id):
-        logging.info("Logout: %s, client: %s", session_id, self.mnemonic)
-        self.logout_complete.set()
+        logging.info("Logout succesful: session: %s, client: %s", session_id, self.mnemonic)
 
     def toAdmin(self, message, session_id):
         msg_type = fix.MsgType()
@@ -233,7 +229,6 @@ class Application(fix.Application):
             message.getHeader().setField(52, sending_time)
             message.setField(fix.Username(self.apiKeyId))
             message.setField(fix.Password(password))
-            message.setField(fix.ResetSeqNumFlag(True))
 
         logging.info("Admin message sent: %s, %s", message, message.getHeader().getField(fix.MsgType()).getString())
 
@@ -360,17 +355,11 @@ class Application(fix.Application):
         return message
 
     def send_logout(self):
-        if self.sessionID is not None:
+        if self.sessionId is not None:
             logout = fix.Message()
             logout.getHeader().setField(fix.MsgType("5"))
-            fix.Session.sendToTarget(logout, self.sessionID)
-            logging.info("Logout message sent for clientId: %s", self.mnemonic)
-        else:
-            logging.warning("No active session to send logout message")
-            self.logout_complete.set()  # Set the event even if there's no active session
-
-    def wait_for_logout(self, timeout=10):
-        return self.logout_complete.wait(timeout)
+            fix.Session.sendToTarget(logout, self.sessionId)
+            logging.info("Logout message sent for client: %s", self.mnemonic)
 
     # Send a new order with the provided side, price, quantity, and order type
     def send_order(self, session_id, side, price, quantity, order_type=fix.OrdType_LIMIT):

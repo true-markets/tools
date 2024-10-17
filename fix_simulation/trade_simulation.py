@@ -63,7 +63,7 @@ class SimulatedTradingApplication(Application):
         order_type = random.choices([fix.OrdType_LIMIT, fix.OrdType_MARKET], weights=[70, 30])[0]
         price, quantity = self.generate_simulated_order_params()
 
-        self.send_order(self.sessionID, side, price, quantity, order_type)
+        self.send_order(self.sessionId, side, price, quantity, order_type)
 
     def simulate_order_modification(self):
         if not self.lastClOrdId:
@@ -83,12 +83,12 @@ class SimulatedTradingApplication(Application):
         new_quantity = new_quantity if modify_quantity else None
         new_order_type = random.choice([fix.OrdType_LIMIT, fix.OrdType_MARKET]) if modify_order_type else None
 
-        self.modify_order(self.sessionID, new_price, new_quantity, new_order_type)
+        self.modify_order(self.sessionId, new_price, new_quantity, new_order_type)
 
     def simulate_order_cancellation(self):
         if not self.lastClOrdId:
             return  # No order to cancel
-        self.cancel_order(self.sessionID)
+        self.cancel_order(self.sessionId)
 
 def run_simulated_trading_client(user_number):
     config_file = f'client{user_number}.cfg'
@@ -99,7 +99,8 @@ def run_simulated_trading_client(user_number):
     try:
         settings = fix.SessionSettings(config_file)
         application = SimulatedTradingApplication(api_key_id, api_key_secret, mnemonic)
-        store_factory = fix.FileStoreFactory(settings)
+        # Use MemoryStoreFactory instead of FileStoreFactory to avoid storing session state
+        store_factory = fix.MemoryStoreFactory()
         log_factory = fix.FileLogFactory(settings)
         initiator = fix.SocketInitiator(application, store_factory, settings, log_factory)
 
@@ -110,12 +111,11 @@ def run_simulated_trading_client(user_number):
         return None, None
 
 
-# Cleanup function to remove all log_ and store_ folders
+# Cleanup function to remove `log` folder
 def cleanup():
     current_directory = os.getcwd()
     for folder_name in os.listdir(current_directory):
-        # Check if the item is a directory and starts with 'log_' or 'store_'
-        if os.path.isdir(folder_name) and (folder_name.startswith('log') or folder_name.startswith('store')):
+        if os.path.isdir(folder_name) and (folder_name.startswith('log')):
             # Remove the directory and all its contents
             shutil.rmtree(folder_name)
             print(f"Removed folder: {folder_name}")
@@ -136,7 +136,6 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-
     for user_number in user_numbers:
         app, initiator = run_simulated_trading_client(user_number)
         if app and initiator:
@@ -148,14 +147,8 @@ def main():
                 stop_event.wait(1)
         finally:
             logging.info("Shutting down simulation...")
-
-            # Wait for all logouts to complete
             for app, initiator in running_clients:
                 app.send_logout()
-                if app.wait_for_logout(timeout=10):
-                    logging.info(f"Logout completed for client {app.mnemonic}")
-                else:
-                    logging.warning(f"Logout timed out for client {app.mnemonic}")
                 initiator.stop(True)  # True means wait for stop to complete
 
             logging.info("All clients have been shut down.")
