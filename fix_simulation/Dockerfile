@@ -1,23 +1,18 @@
-# Use Rocky Linux 9.3 as the base image and set platform to linux/amd64
-FROM --platform=linux/amd64 rockylinux:9.3
-ENV DEBIAN_FRONTEND=noninteractive
+# Use official Python image as base, set to amd64 architecture
+FROM --platform=linux/amd64 python:3.9-slim
 
-# Update the system
-RUN dnf -y update
+# Install system dependencies and build tools
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
-# Upgrade to Rocky Linux 9.4 (optional)
-RUN dnf -y install dnf-plugin-system-upgrade \
-    && dnf -y system-upgrade download --releasever=9.4
+# Install Python packages
+RUN pip install quickfix requests
 
-# Install development tools and necessary dependencies
-RUN dnf -y group install "Development Tools"
-RUN dnf -y install epel-release
-RUN dnf -y install cmake clang clang-devel clang-tools-extra
-RUN dnf -y install sudo wget unzip python3-pip jq python3-devel
-
-# Install QuickFIX and requests using pip
-RUN pip3 install quickfix requests
-
+# Set working directory
 WORKDIR /app
 
+# Copy application files
 COPY . /app
