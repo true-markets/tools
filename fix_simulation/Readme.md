@@ -6,9 +6,10 @@ This project contains a simulated trading application that interacts with a FIX 
 - Python 3.7 or higher
 
 ## Setup
-1. Clone this repository to your local machine.
-
-2. Create a `.env` file in the root directory of the project with the following content:
+1. Clone the `true-markets/tools` repository, `git clone git@github.com:true-markets/tools.git` and cd into the tools directory.
+2. Install the required git submodules: `git submodule update --init --recursive`
+3. Navigate to the `trade_simulation` directory: `cd tools/trade_simulation`
+3. Create a `.env` file in the root directory of the project with the following content:
 
 ```
 TRUEX_USER1_MNEMONIC=your_user1_mnemonic
