@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  quickfix:
+    container_name: truex_fix_trade_simulation
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    volumes:
+      - .:/app
+    environment:
+      - CC=clang
+      - CXX=clang++
+      - TRUEX_CLIENT_MNEMONICS=${TRUEX_CLIENT_MNEMONICS}
+      - TRUEX_CLIENT_API_KEY_ID=${TRUEX_CLIENT_API_KEY_ID}
+      - TRUEX_CLIENT_API_KEY_SECRET=${TRUEX_CLIENT_API_KEY_SECRET}
+      - TRUEX_API_ADDRESS=http://uat1.truex.co:9742
+    command: ["python3", "trade_simulation.py"]
+    stdin_open: true
+    tty: true
