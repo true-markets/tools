@@ -33,11 +33,9 @@ To run the trade simulation using Docker Compose:
 
 
 ## TRUEX Environments
-1. Development - 10.10.10.11
-2. User Acceptance Test(UAT) - 10.10.20.11
+2. User Acceptance Test(UAT) -`FIX SocketConnectHost=uat1.truex.co`, `SocketConnectPort=19484`
+3. User Acceptance Test(UAT) -`REST API Address=http://uat1.truex.co:9742`
 
-Replace `SocketConnectHost` in `client1.cfg` and `client2.cfg` with the appropriate values for the environment you are connecting to.<br>
-Replace `TRUEX_API_ADDRESS` in `docker-compose.yml` with the appropriate value for the environment you are connecting to.
 
 ## Troubleshooting
 
@@ -45,7 +43,7 @@ If you encounter any issues with permissions or file access, ensure that the nec
 Check the logs for any error messages that might indicate configuration issues or connection problems.
 
 To exit the container and stop the simulation, run `docker stop truex_fix_trade_simulation` in a separate terminal window or press `Ctrl+C` in the terminal where the `docker-compose up` command was run. <br>
-Might have to update the SENDER_COMP_ID after each restart of the container, as the fix session might not have logged out properly.
+Consider updating the `SENDER_COMP_ID` if issues persist with the connection to the FIX server.
 
 Additional Information
 
