@@ -118,7 +118,7 @@ def run_simulated_trading_client(mnemonic):
     try:
         settings, begin_str, target_comp_id = load_config_and_settings(config_file)
         # Create a session ID with the given mnemonic
-        session_id = fix.SessionID(begin_str, f"{mnemonic}_8", target_comp_id)
+        session_id = fix.SessionID(begin_str, f"{mnemonic}", target_comp_id)
         settings.set(session_id, fix.Dictionary())
 
         application = SimulatedTradingApplication(api_key_id, api_key_secret, mnemonic)
