@@ -305,12 +305,11 @@ class Application(fix.Application):
             side_str,
             order_type_str)
 
-    # Generate a unique order ID based on timestamp, UUID, and a counter
+    # Generate a unique order ID based on UUID, and a counter
     def generate_order_id(self):
-        timestamp = int(time.time() * 1000)  # Use millisecond precision
         self.orderIdCounter += 1
         uuid_fragment = uuid.uuid4().hex[:8]
-        return f"{timestamp}-{uuid_fragment}-{self.orderIdCounter}"
+        return f"{uuid_fragment}-{self.orderIdCounter}"
 
     # Modify an existing order with new price, quantity, and/or order type
     def modify_order(self, session_id, new_price=None, new_quantity=None, new_order_type=None):
