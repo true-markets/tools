@@ -42,6 +42,8 @@ def make_request(base_url, token, method, path, body=None):
         response = requests.get(url, headers=headers)
     elif method == "post":
         response = requests.post(url, headers=headers, json=json.loads(body) if body else None)
+    elif method == "put":
+        response = requests.put(url, headers=headers, json=json.loads(body) if body else None)
     elif method == "delete":
         response = requests.delete(url, headers=headers)
     elif method == "patch":
@@ -54,9 +56,9 @@ def make_request(base_url, token, method, path, body=None):
 # Main function to parse arguments and execute the script
 def main():
     parser = argparse.ArgumentParser(description="API client script.")
-    parser.add_argument("--method", required=True, help="HTTP method (get, post, delete, patch).")
+    parser.add_argument("--method", required=True, help="HTTP method (get, post, put, delete, patch).")
     parser.add_argument("--path", required=True, help="API path (e.g., /v2/conversion/stablecoin).")
-    parser.add_argument("--body", help="Request body (for POST or PATCH methods).")
+    parser.add_argument("--body", help="Request body (for POST, PUT or PATCH methods).")
     
     args = parser.parse_args()
 
