@@ -5,7 +5,7 @@ This Python script is designed to interact with an API using OAuth2 for authenti
 ## Features
 - Obtain an OAuth2 token using client credentials.
 - Make API requests with the token for authentication.
-- Supports multiple HTTP methods (`GET`, `POST`, `DELETE`, `PATCH`).
+- Supports multiple HTTP methods (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`).
 - Configurable via environment variables for flexibility.
 
 ## Requirements
@@ -32,26 +32,26 @@ The script relies on the following environment variables:
 ## Usage
 
 ### Running the Script
-To use the script, you must specify the HTTP method and API path. Optionally, you can include a request body for `POST` or `PATCH` methods.
+To use the script, you must specify the HTTP method and API path. Optionally, you can include a request body for `POST`, `PUT` or `PATCH` methods.
 
 ```
 python paxos.py --method METHOD --path PATH [--body BODY]
 ```
 
 ### Arguments
-- **`--method`** (required): The HTTP method to use (`get`, `post`, `delete`, or `patch`).
+- **`--method`** (required): The HTTP method to use (`get`, `post`, `put`,`delete`, or `patch`).
 - **`--path`** (required): The API path (e.g., `/v2/conversion/stablecoin`).
-- **`--body`** (optional): The JSON-formatted request body for `POST` or `PATCH` methods.
+- **`--body`** (optional): The JSON-formatted request body for `POST`, `PUT` or `PATCH` methods.
 
 ### Example Commands
 
-#### 1. **GET Request**
+#### 1. **Without Body (GET Request)**
 Fetch a resource from the API:
 ```
 python paxos.py --method get --path /v2/profiles
 ```
 
-#### 2. **POST Request**
+#### 2. **With Body (POST Request)**
 Send data to the API:
 ```
 python paxos.py --method post --path /v2/sandbox/profiles/cac2c7cb-2c79-47aa-acb6-3b6957708fa6/deposit --body '{"asset": "PYUSD", "amount": "1", "crypto_network": "ETHEREUM"}'
