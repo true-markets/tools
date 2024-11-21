@@ -59,6 +59,7 @@ def main():
     parser.add_argument("--method", required=True, help="HTTP method (get, post, put, delete, patch).")
     parser.add_argument("--path", required=True, help="API path (e.g., /v2/conversion/stablecoin).")
     parser.add_argument("--body", help="Request body (for POST, PUT or PATCH methods).")
+    parser.add_argument("--pretty", action=argparse.BooleanOptionalAction, help="Formats the output for readability.")
     
     args = parser.parse_args()
 
@@ -82,7 +83,10 @@ def main():
         # Output the response
         print("Response:")
         print(f"Status Code: {response.status_code}")
-        print(response.text)
+        if args.pretty == True:
+            print(json.dumps(response.json(), indent=4))
+        else:
+            print(response.text)
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
