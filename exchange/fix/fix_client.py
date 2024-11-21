@@ -117,7 +117,6 @@ def GetOrders(ctx):
     if isinstance(response, list) and len(response) > 0:
         i = 0
         for entry in response:
-            # {'id': '1159687754868457676', 'status': 'ACTIVE', 'order_info': {'parent_id': '6917530601838936065', 'client_id': '1159687669046444040', 'instrument_id': '1159687669065121826', 'qty': '0.01', 'price': '10000', 'flags': 0, 'side': 'BUY', 'type': 'LIMIT', 'tif': 'GTC', 'exec_inst_flags': [], 'hold_fee_rate': '0.002'}, 'modify_info': {'parent_id': '0', 'client_id': '0', 'new_qty': '0', 'new_price': '0', 'new_type': 'INVALID'}, 'external_id': '5672489f-f269-41d2-9b94-4aa5890688dd', 'ref_external_id': '0',  'pending_qty': '0', 'leaves_qty': '0.01', 'executed_qty': '0', 'executed_vwap': '0'}
             inst_id = entry['order_info']['instrument_id']
             symbol = ctx.instrumentIds[inst_id]['info']['symbol']
             ctx.message_queue.put(f"Order {i}: {entry['external_id']} {entry['order_info']['side']:<4} {entry['order_info']['qty']} {symbol} @ {entry['order_info']['type']} {entry['order_info']['price']} {entry['order_info']['tif']} | {entry['status']} PQ:{entry['pending_qty']} LQ:{entry['leaves_qty']} EQ:{entry['executed_qty']} VWAP:{entry['executed_vwap']}")
@@ -296,14 +295,29 @@ class FIXApp(fix.Application):
         except fix.SessionNotFound:
             self.message_queue.put("Failed to send order: FIX session not found.")
 
-    def modify_order(self, new_price, new_size):
+    def modify_order(self, orig_cl_ord_id, client_id, new_price, new_qty):
         if not self.sessionID:
             self.message_queue.put("No active FIX session.")
             return
 
-        # Placeholder for modification logic
-        # In real scenarios, you need the OrigClOrdID to modify an existing order
-        self.message_queue.put("Order modification feature is not implemented in this demo.")
+        message = fix50sp2.OrderCancelReplaceRequest()
+        message.setField(fix.ClOrdID(str(uuid.uuid4())))
+        message.setField(fix.OrigClOrdID(str(orig_cl_ord_id)))
+        message.setField(fix.Price(new_price))
+        message.setField(fix.OrderQty(new_qty))
+        message.setField(fix.OrdType(fix.OrdType_LIMIT))
+
+        # Add PartyIDs group
+        party_group = fix50sp2.OrderCancelReplaceRequest.NoPartyIDs()
+        party_group.setField(fix.PartyID(client_id))
+        party_group.setField(fix.PartyRole(fix.PartyRole_CLIENT_ID))
+        message.addGroup(party_group)
+
+        try:
+            fix.Session.sendToTarget(message, self.sessionID)
+            self.message_queue.put(f"Modify sent: OrigClOrdId={orig_cl_ord_id}")
+        except fix.SessionNotFound:
+            self.message_queue.put("Failed to send order: FIX session not found.")
 
     def cancel_order(self, orig_cl_ord_id, client_id):
         if not self.sessionID:
@@ -452,15 +466,26 @@ class FIXInterface:
                 except ValueError:
                     self.display_message("Invalid parameters. Usage: order BUY|SELL <price> <size> <client_index>")
         elif cmd == "modify":
-            if len(parts) != 3:
-                self.display_message("Usage: modify <new_price> <new_size>")
+            if len(parts) < 5:
+                self.display_message("Usage: modify <orig_cl_ord_id> <client_index> <new_price> <new_size>")
             else:
                 try:
-                    new_price = float(parts[1])
-                    new_size = float(parts[2])
-                    self.fix_app.modify_order(new_price, new_size)
-                except ValueError:
-                    self.display_message("Invalid parameters. Usage: modify <new_price> <new_size>")
+                    orig_cl_ord_id = parts[1]
+                    client_index = int(parts[2])
+                    new_price = float(parts[3])
+                    new_qty = float(parts[4])
+
+                    # Validate at least one parameter is provided
+                    if new_price is None or new_qty is None:
+                        self.display_message("Parameters must be set: price and qty.")
+                        return
+    
+                    client_id = self.fix_app.clientIds[client_index]
+
+                    # Call the modify_order method with the parsed parameters
+                    self.fix_app.modify_order(orig_cl_ord_id, client_id, new_price, new_qty)
+                except ValueError as e:
+                    self.display_message(f"Invalid parameters: {e}. Usage: modify <orig_cl_ord_id> <client_index> <new_price> <new_size>")
         elif cmd == "cancel":
             if len(parts) != 3:
                 self.display_message("Usage: cancel <orig_cl_ord_id> <client_index>")
@@ -486,15 +511,15 @@ class FIXInterface:
         """
         Display available commands.
         """
-        help_text = (
+        help_text = ( 
             "Available FIX commands:\n"
-            "  help                                             Show this help message\n"
-            "  list                                             List active orders\n"
-            "  order BUY|SELL <price> <size> <client_index>     Send a new order\n"
-            "  modify <new_price> <new_size>                    Modify an existing order\n"
-            "  cancel                                           Cancel an existing order\n"
-            "  logout                                           Logout from FIX session\n"
-            "  exit / quit                                      Exit the application"
+            "  help                                                           Show this help message\n"
+            "  list                                                           List active orders\n"
+            "  order <BUY|SELL> <price> <size> <client_index>                 Send a new order\n"
+            "  modify <orig_cl_ord_id> <client_index> <new_price> <new_size>  Modify an existing order\n"
+            "  cancel                                                         Cancel an existing order\n"
+            "  logout                                                         Logout from FIX session\n"
+            "  exit / quit                                                    Exit the application"
         )
         for line in help_text.split('\n'):
             self.display_message(line)
