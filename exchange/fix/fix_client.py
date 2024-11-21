@@ -18,32 +18,31 @@ from urllib.parse import urlparse
 # =============================
 # Helper functions
 # =============================
-def GetClientIds(fix, env, api_key_id, api_key_secret):
+def QueryRest(ctx, method, path, body = None):
     # Define the constants for the headers
     HEADER_AUTH_TIMESTAMP = "x-truex-auth-timestamp"
     HEADER_AUTH_SIGNATURE = "x-truex-auth-signature"
     HEADER_AUTH_TOKEN = "x-truex-auth-token"
 
     url = ""
-    if env.lower() == "dev":
-        # Dev shared
-        #url = "http://10.10.10.11:10185/api/v1/client"
-        # Dev local
-        url = "http://10.10.10.11:9742/api/v1/client"
-    elif env.lower() == "uat":
-        url = "http://10.10.20.11:9742/api/v1/client"
+    if ctx.env.lower() == "dev":
+        url = "http://dev1.truex.co:9742"
+    elif ctx.env.lower() == "uat":
+        url = "http://uat.truex.co:9742"
+
+    url += path
 
     # Prepare the current timestamp and method
     auth_timestamp = str(int(time.time()))
-    http_method = "GET"
+    http_method = method
 
     # Combine the values into a payload for HMAC
     parsed_url = urlparse(url)
     path = parsed_url.path
-    payload = auth_timestamp + http_method + path
+    payload = auth_timestamp + http_method.upper() + path
 
     # Create HMAC signature using the secret key
-    hmac_key = api_key_secret.encode('utf-8')
+    hmac_key = ctx.apiKeySecret.encode('utf-8')
     hmac_message = payload.encode('utf-8')
     hmac_digest = hmac.new(hmac_key, hmac_message, hashlib.sha256).digest()
 
@@ -54,30 +53,77 @@ def GetClientIds(fix, env, api_key_id, api_key_secret):
     headers = {
         HEADER_AUTH_TIMESTAMP: auth_timestamp,
         HEADER_AUTH_SIGNATURE: auth_signature,
-        HEADER_AUTH_TOKEN: api_key_id,
+        HEADER_AUTH_TOKEN: ctx.apiKeyId,
         "Content-Type": "application/json"
     }
 
     # Perform the GET request (or other HTTP methods as necessary)
-    response = requests.get(url, headers=headers)
+    response = None
+    if method == "get":
+        response = requests.get(url, headers=headers)
+    elif method == "post":
+        response = requests.post(url, headers=headers, json=body)
+    elif method == "put":
+        response = requests.put(url, headers=headers, json=body)
+    elif method == "delete":
+        response = requests.delete(url, headers=headers)
 
     # Check the response
-    if response.status_code == 200:
-        fix.message_queue.put("Success:", response.json())
-    else:
-        fix.message_queue.put(f"Failed with status code {response.status_code}: {response.text}")
+    if response == None:
+        ctx.message_queue.put("Unsupported method used: ", method)
+        return None
+    elif response.status_code != 200:
+            ctx.message_queue.put(f"Failed {method} query on {url} with status code {response.status_code}: {response.text}")
+            return None
+
+    return response.json()
+
+def GetInstrumentIds(ctx):
+    response = QueryRest(ctx, "get", "/api/v1/instrument")
+
+    # Loop through each entry in the response data
+    if not isinstance(response, list):
+        return []
+
+    instruments = {}
+    for instrument in response:
+        key = instrument['id']
+        instruments[key] = instrument
+
+    return instruments
+
+def GetClientIds(ctx):
+    response = QueryRest(ctx, "get", "/api/v1/client")
 
     matching_ids = []
     # Loop through each entry in the response data
-    for entry in response.json():
+    if not isinstance(response, list):
+        return []
+
+    for entry in response:
         matching_ids.append(entry['id'])
 
     # Check if a match was found
     if len(matching_ids) > 0:
-        fix.message_queue.put(f"Found matching ID(s): {matching_ids}")
+        ctx.message_queue.put(f"Found matching ID(s): {matching_ids}")
     else:
-        fix.message_queue.put("No users for api_key_id found.")
+        ctx.message_queue.put("No users for apiKeyId found.")
     return matching_ids
+
+def GetOrders(ctx):
+    # Perform the GET request (or other HTTP methods as necessary)
+    response = QueryRest(ctx, "get", "/api/v1/order")
+
+    if isinstance(response, list) and len(response) > 0:
+        i = 0
+        for entry in response:
+            # {'id': '1159687754868457676', 'status': 'ACTIVE', 'order_info': {'parent_id': '6917530601838936065', 'client_id': '1159687669046444040', 'instrument_id': '1159687669065121826', 'qty': '0.01', 'price': '10000', 'flags': 0, 'side': 'BUY', 'type': 'LIMIT', 'tif': 'GTC', 'exec_inst_flags': [], 'hold_fee_rate': '0.002'}, 'modify_info': {'parent_id': '0', 'client_id': '0', 'new_qty': '0', 'new_price': '0', 'new_type': 'INVALID'}, 'external_id': '5672489f-f269-41d2-9b94-4aa5890688dd', 'ref_external_id': '0',  'pending_qty': '0', 'leaves_qty': '0.01', 'executed_qty': '0', 'executed_vwap': '0'}
+            inst_id = entry['order_info']['instrument_id']
+            symbol = ctx.instrumentIds[inst_id]['info']['symbol']
+            ctx.message_queue.put(f"Order {i}: {entry['external_id']} {entry['order_info']['side']:<4} {entry['order_info']['qty']} {symbol} @ {entry['order_info']['type']} {entry['order_info']['price']} {entry['order_info']['tif']} | {entry['status']} PQ:{entry['pending_qty']} LQ:{entry['leaves_qty']} EQ:{entry['executed_qty']} VWAP:{entry['executed_vwap']}")
+            i+=1
+    else:
+        ctx.message_queue.put("No orders found.")
 
 def GeneratePassword(secret, sending_time, msg_type, msg_seq_num, sender_comp_id, target_comp_id, username):
     # Step 1: Concatenate the fields to form the message
@@ -141,8 +187,12 @@ class FIXApp(fix.Application):
 
     def onLogon(self, sessionID):
         self.sessionID = sessionID
-        self.clientIds = GetClientIds(self, self.env, self.apiKeyId, self.apiKeySecret)
-        self.message_queue.put(f"Logon successful: {sessionID}")
+        self.clientIds = GetClientIds(self)
+        self.instrumentIds = GetInstrumentIds(self)
+        if (sessionID != None):
+            self.message_queue.put(f"Logon successful: {sessionID}")
+        else:
+            self.message_queue.put("Logon failed!")
 
     def onLogout(self, sessionID):
         self.message_queue.put(f"Logout: {sessionID}")
@@ -155,10 +205,6 @@ class FIXApp(fix.Application):
         if msg_type.getValue() == fix.MsgType_Logon:
             self.sessionId = None
 
-            # Grab key ID and secret from env vars
-            self.apiKeyId = os.getenv("TRUEX_KEY_ID")
-            self.apiKeySecret = os.getenv("TRUEX_KEY_SECRET")
-            
             # Retrieve SendingTime from the header (Tag 52)
             sending_time =  datetime.utcnow().strftime('%Y%m%d-%H:%M:%S.%f')[:-3]
             # Retrieve other required fields
@@ -214,6 +260,13 @@ class FIXApp(fix.Application):
         message.getField(exec_type)
         self.message_queue.put(f"Execution Report: ExecType={exec_type.getValue()} {message}")
 
+    def list_orders(self):
+        if not self.sessionID:
+            self.message_queue.put("No active FIX session.")
+            return
+
+        GetOrders(self)
+
     def send_order(self, side, price, size, client_id):
         if not self.sessionID:
             self.message_queue.put("No active FIX session.")
@@ -252,14 +305,26 @@ class FIXApp(fix.Application):
         # In real scenarios, you need the OrigClOrdID to modify an existing order
         self.message_queue.put("Order modification feature is not implemented in this demo.")
 
-    def cancel_order(self):
+    def cancel_order(self, orig_cl_ord_id, client_id):
         if not self.sessionID:
             self.message_queue.put("No active FIX session.")
             return
 
-        # Placeholder for cancellation logic
-        # In real scenarios, you need the OrigClOrdID to cancel an existing order
-        self.message_queue.put("Order cancellation feature is not implemented in this demo.")
+        message = fix50sp2.OrderCancelRequest()
+        message.setField(fix.ClOrdID(str(uuid.uuid4())))
+        message.setField(fix.OrigClOrdID(str(orig_cl_ord_id)))
+
+        # Add PartyIDs group
+        party_group = fix50sp2.OrderCancelRequest.NoPartyIDs()
+        party_group.setField(fix.PartyID(client_id))
+        party_group.setField(fix.PartyRole(fix.PartyRole_CLIENT_ID))
+        message.addGroup(party_group)
+
+        try:
+            fix.Session.sendToTarget(message, self.sessionID)
+            self.message_queue.put(f"Cancel sent: OrigClOrdId={orig_cl_ord_id}")
+        except fix.SessionNotFound:
+            self.message_queue.put("Failed to send order: FIX session not found.")
 
     def send_logout(self):
         if self.sessionID:
@@ -357,6 +422,11 @@ class FIXInterface:
             self.help()
         elif cmd in ("exit", "quit"):
             self.exit()
+        elif cmd == "list":
+            if len(parts) != 1:
+                self.display_message("Usage: list")
+            else:
+                self.fix_app.list_orders()
         elif cmd == "order":
             if len(parts) != 5:
                 self.display_message("Usage: order BUY|SELL <price> <size> <client_index>")
@@ -392,10 +462,18 @@ class FIXInterface:
                 except ValueError:
                     self.display_message("Invalid parameters. Usage: modify <new_price> <new_size>")
         elif cmd == "cancel":
-            if len(parts) != 1:
-                self.display_message("Usage: cancel")
+            if len(parts) != 3:
+                self.display_message("Usage: cancel <orig_cl_ord_id> <client_index>")
             else:
-                self.fix_app.cancel_order()
+                try:
+                    orig_cl_ord_id = parts[1]
+                    client_index = int(parts[2])
+
+                    client_id = self.fix_app.clientIds[client_index]
+
+                    self.fix_app.cancel_order(orig_cl_ord_id, client_id)
+                except ValueError:
+                    self.display_message("Invalid parameters. Usage: order BUY|SELL <price> <size> <client_index>")
         elif cmd == "logout":
             if len(parts) != 1:
                 self.display_message("Usage: logout")
@@ -410,8 +488,9 @@ class FIXInterface:
         """
         help_text = (
             "Available FIX commands:\n"
-            "  help                             Show this help message\n"
-            "  order BUY|SELL <price> <size> <client_index>    Send a new order\n"
+            "  help                                             Show this help message\n"
+            "  list                                             List active orders\n"
+            "  order BUY|SELL <price> <size> <client_index>     Send a new order\n"
             "  modify <new_price> <new_size>                    Modify an existing order\n"
             "  cancel                                           Cancel an existing order\n"
             "  logout                                           Logout from FIX session\n"
@@ -508,6 +587,10 @@ def main():
     # Initialize the FIX application
     fix_app = FIXApp(message_queue, app_id="FIX_Client")
     fix_app.env = env
+    # Grab key ID and secret from env vars
+    fix_app.apiKeyId = os.getenv("TRUEX_KEY_ID")
+    fix_app.apiKeySecret = os.getenv("TRUEX_KEY_SECRET")
+            
 
     # Start the FIX session in a separate daemon thread
     fix_thread = threading.Thread(target=run_fix_session, args=(fix_config_path, fix_app, message_queue), daemon=True)
