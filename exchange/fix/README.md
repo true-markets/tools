@@ -91,22 +91,30 @@ Interact with the script using the following commands in the CLI:
 
 - **Modify**:
   ```
-  modify <new_price> <new_size>
+  modify <orig_cl_ord_id> <client_index> <new_price> <new_size>
   ```
-  Modifies an existing order (currently not implemented).
+  Modifies an existing order using the ClOrdId and the index of the client ID with the specified modification parameters:
+  - `<new_price>`: Modified price of the order.
+  - `<new_size>`: Modified size of the order.
 
 - **Cancel**:
   ```
-  cancel
+  cancel <orig_cl_ord_id> <client_index> 
   ```
-  Cancels an existing order (currently not implemented).
+  Cancels an existing order using the ClOrdId.
 
 - **Logout**:
   ```
   logout
   ```
   Logs out from the current FIX session.
-
+  
+- **List**:
+  ```
+  list
+  ```
+  Lists information about active orders.
+  
 - **Exit**:
   ```
   exit
