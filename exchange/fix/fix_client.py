@@ -498,7 +498,7 @@ class FIXInterface:
 
                     self.fix_app.cancel_order(orig_cl_ord_id, client_id)
                 except ValueError:
-                    self.display_message("Invalid parameters. Usage: order BUY|SELL <price> <size> <client_index>")
+                    self.display_message("Invalid parameters. Usage: cancel <orig_cl_ord_id> <client_index>")
         elif cmd == "logout":
             if len(parts) != 1:
                 self.display_message("Usage: logout")
@@ -517,7 +517,7 @@ class FIXInterface:
             "  list                                                           List active orders\n"
             "  order <BUY|SELL> <price> <size> <client_index>                 Send a new order\n"
             "  modify <orig_cl_ord_id> <client_index> <new_price> <new_size>  Modify an existing order\n"
-            "  cancel                                                         Cancel an existing order\n"
+            "  cancel <orig_cl_ord_id> <client_index>                         Cancel an existing order\n"
             "  logout                                                         Logout from FIX session\n"
             "  exit / quit                                                    Exit the application"
         )
