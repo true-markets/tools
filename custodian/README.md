@@ -1,6 +1,6 @@
 # Custodian API Client Script
 
-This Python script is designed to interact with an API using OAuth2 for authentication and supports various HTTP methods such as `GET`, `POST`, `DELETE`, and `PATCH`. It is useful for testing and automating API interactions.
+This Python script is designed to interact with an API using OAuth2 for authentication and supports various HTTP methods such as `GET`, `POST`, `PUT`, `DELETE`, and `PATCH`. It is useful for testing and automating API interactions.
 
 ## Features
 - Obtain an OAuth2 token using client credentials.
