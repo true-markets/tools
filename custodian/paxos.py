@@ -61,7 +61,7 @@ def main():
     parser.add_argument("--path", required=True, help="API path (e.g., /v2/conversion/stablecoin).")
     parser.add_argument("--body", help="Request body (for POST, PUT or PATCH methods).")
     parser.add_argument("--pretty", action=argparse.BooleanOptionalAction, help="Formats the output for readability.")
-    parser.add_argument("--raw", action=argparse.BooleanOptionalAction, help="Only outputs JSON response data, not status code")
+    parser.add_argument("--raw", action=argparse.BooleanOptionalAction, help="Only outputs JSON response data, no status code or other logs")
     
     args = parser.parse_args()
 
