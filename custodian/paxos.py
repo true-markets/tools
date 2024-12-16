@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timedelta
 
 # Function to acquire a token
-def get_token(api_key_id, api_key_secret, api_key_scope, base_url):
+def get_token(api_key_id, api_key_secret, api_key_scope, base_url, args):
     auth_url = f"{base_url}/oauth2/token"
     body = {
         "grant_type": "client_credentials",
@@ -24,7 +24,8 @@ def get_token(api_key_id, api_key_secret, api_key_scope, base_url):
             raise ValueError("Missing token or expiration in response")
         
         expiration_time = datetime.utcnow() + timedelta(seconds=expires_in)
-        print(f"Acquired token successfully. Expires in {expires_in} seconds (at {expiration_time}).")
+        if args.raw != True:
+            print(f"Acquired token successfully. Expires in {expires_in} seconds (at {expiration_time}).")
         return access_token
     else:
         raise RuntimeError(f"Failed to acquire token. HTTP {response.status_code}: {response.text}")
@@ -60,6 +61,7 @@ def main():
     parser.add_argument("--path", required=True, help="API path (e.g., /v2/conversion/stablecoin).")
     parser.add_argument("--body", help="Request body (for POST, PUT or PATCH methods).")
     parser.add_argument("--pretty", action=argparse.BooleanOptionalAction, help="Formats the output for readability.")
+    parser.add_argument("--raw", action=argparse.BooleanOptionalAction, help="Only outputs JSON response data, not status code")
     
     args = parser.parse_args()
 
@@ -75,14 +77,14 @@ def main():
 
     try:
         # Get token
-        token = get_token(api_key_id, api_key_secret, api_key_scope, base_url)
+        token = get_token(api_key_id, api_key_secret, api_key_scope, base_url, args)
         
         # Make the request
         response = make_request(base_url, token, args.method, args.path, args.body)
         
         # Output the response
-        print("Response:")
-        print(f"Status Code: {response.status_code}")
+        if args.raw != True:
+            print(f"Status Code: {response.status_code}")
         if args.pretty == True:
             print(json.dumps(response.json(), indent=4))
         else:
