@@ -32,13 +32,14 @@ class TruexWebsocket(object):
 
     """TruexWebsocket is a websocket client that connects to the Truex server and listens for messages."""
 
-    def __init__(self):
+    def __init__(self, condition=None):
         self.__reset()
         self.thread = None
         self.loop = None
         self.recv_task = None
         self.send_task = None
         self.send_queue = None
+        self.condition = condition
         self.auth = WebsocketAuth(settings.API_KEY, settings.API_SECRET)
 
     def __reset(self):
@@ -67,6 +68,7 @@ class TruexWebsocket(object):
 
         ticker = {}
         tickers = self.data["EBBO"]
+        ticker_info = {}
         if symbol not in tickers:
             if "INSTRUMENT" not in self.data:
                 return False
@@ -105,6 +107,7 @@ class TruexWebsocket(object):
 
         symbols = self.data["INSTRUMENT"]
         if symbol not in symbols:
+            logger.error(f"Unknown symbol: {symbol}")
             return False
 
         logger.info(f"{symbol} status: {symbols[symbol]['status']}")
@@ -260,6 +263,8 @@ class TruexWebsocket(object):
                                 self.seqnum[chn] = msg["seqnum"]
                                 self.data[chn][msg["data"]["info"]["symbol"]] = msg["data"]
                                 self.symbol[msg["data"]["id"]] = msg["data"]["info"]["symbol"]
+                                with self.condition:
+                                    self.condition.notify_all()
                             if upd == "UPDATE":
                                 if msg["seqnum"]  != self.seqnum[chn]:
                                     gap = msg["seqnum"] - self.seqnum[chn]
@@ -282,7 +287,7 @@ class TruexWebsocket(object):
                                 self.seqnum[chn] = msg["seqnum"]
                                 self.data[chn][symbol] = msg["data"]
                             if upd == "UPDATE":
-                                if msg["seqnum"]  != self.seqnum[chn]:
+                                if msg["seqnum"] != self.seqnum[chn]:
                                     gap = int(msg["seqnum"]) - int(self.seqnum[chn])
                                     logger.error(f"Gap of {gap} msgs detected in {chn}")
 
@@ -306,6 +311,8 @@ class TruexWebsocket(object):
                             logger.info(f"Trade {symbol}: {msg}")
                             self.data[chn][symbol] = msg["data"]
                             self.seqnum[chn] = str(int(msg["seqnum"]) + 1)
+                            with self.condition:
+                                self.condition.notify_all()
 
                         else:
                             raise Exception(f"Unknown channel: {chn}")

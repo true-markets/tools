@@ -4,12 +4,15 @@ import signal
 import sys
 import os
 import time
+import threading
 
 from datetime import datetime
 # our modules
 from market_maker import truex
 from market_maker.settings import settings
 from market_maker.utils import log, constants, errors, math
+from market_maker.utils.dotdict import dotdict
+from market_maker.utils.tick import GetQuoteTick
 
 #
 # Helpers
@@ -18,7 +21,7 @@ watched_files_mtimes = [(f, os.path.getmtime(f)) for f in settings.WATCHED_FILES
 logger = log.setup_custom_logger('root')
 
 class ExchangeInterface:
-    def __init__(self, dry_run=False):
+    def __init__(self, dry_run=False, condition=None):
         self.dry_run = dry_run
         if len(sys.argv) > 1:
             self.symbol = sys.argv[1]
@@ -27,16 +30,18 @@ class ExchangeInterface:
         self.truex = truex.TrueX(rest_url=settings.BASE_REST_URL, ws_url=settings.BASE_WS_URL, symbol=self.symbol,
                                     apiKey=settings.API_KEY, apiSecret=settings.API_SECRET,
                                     orderIDPrefix=settings.ORDERID_PREFIX, postOnly=settings.POST_ONLY,
-                                    timeout=settings.TIMEOUT)
+                                    timeout=settings.TIMEOUT, condition=condition)
         self.client_id = None
+        self.quoting = False
 
-    def get_instrument(self, symbol=None):
-        if symbol is None:
-            symbol = self.symbol
-        logger.info("Subscribing to instrument data for symbol: %s" % symbol)
-        self.truex.Instrument(symbol)
-        self.truex.Ticker(symbol)
-        return symbol
+    def get_market(self):
+        logger.info("Subscribing to market data for symbol: %s" % self.symbol)
+        self.truex.Market(self.symbol)
+
+    def get_instrument(self):
+        logger.info("Subscribing to instrument data for symbol: %s" % self.symbol)
+        self.truex.Instrument(self.symbol)
+        return self.symbol
 
     def get_client(self):
         # return JSON object of client data
@@ -50,15 +55,11 @@ class ExchangeInterface:
         logger.error("No matching ID found for user: %s." % settings.TRUEX_USER)
         return 0
 
-    def get_delta(self, symbol=None):
-        if symbol is None:
-            symbol = self.symbol
-        return self.get_position(symbol)['qty']
+    def get_delta(self):
+        return self.get_position()['qty']
 
-    def get_position(self, symbol=None):
-        if symbol is None:
-            symbol = self.symbol
-        return self.truex.Position(symbol)
+    def get_position(self):
+        return self.truex.Position(self.symbol)
 
     def get_base_balance(self):
         return self.truex.BaseBalance()
@@ -85,10 +86,8 @@ class ExchangeInterface:
         lowest_sell = min(sells or [], key=lambda o: o['order_info']['price'])
         return lowest_sell if lowest_sell else {'price': 2**32}  # ought to be enough for anyone
 
-    def get_ticker(self, symbol=None):
-        if symbol is None:
-            symbol = self.symbol
-        return self.truex.Ticker(symbol)
+    def get_ticker(self):
+        return self.truex.Ticker(self.symbol)
 
     def create_orders(self, orders):
         if self.dry_run:
@@ -119,7 +118,11 @@ class ExchangeInterface:
         # Check if the market is open
         if not self.truex.IsMarketOpen(self.symbol):
             logger.error("Market is closed right now. Please try again later.")
-            raise Exception("Market is closed right now. Please try again later.")
+            #raise Exception("Market is closed right now. Please try again later.")
+        elif not self.quoting:
+            logger.info("Market is open. Starting market maker.")
+            self.quoting = True
+            self.get_market()
 
     def check_orderbook(self):
         # Check if the orderbook is sane
@@ -130,23 +133,24 @@ class ExchangeInterface:
 
 class OrderManager:
     def __init__(self):
-        self.exchange = ExchangeInterface(settings.DRY_RUN)
+        self.condition = threading.Condition()
+        self.exchange = ExchangeInterface(settings.DRY_RUN, self.condition)
         if settings.DRY_RUN:
             logger.info("DRY RUN -- Orders printed below represent what would be posted to the exchange")
         else:
             logger.info("LIVE RUN -- Orders will be posted to the exchange")
         # Once exchange is created, register exit handler that will always cancel orders
         # on any error.
-        atexit.register(self.exit)
-        signal.signal(signal.SIGTERM, self.exit)
 
+        self.running = True
         self.start_time = datetime.now()
         self.client = self.exchange.get_client()
         self.instrument = self.exchange.get_instrument()
         self.starting_qty = self.exchange.get_delta()
         self.running_qty = self.starting_qty
-        self.running = True
 
+        atexit.register(self.exit)
+        signal.signal(signal.SIGTERM, self.exit)
         logger.info(f"Order Manager initializing @ {self.start_time}")
 
     def restart(self):
@@ -176,8 +180,8 @@ class OrderManager:
         # Set up our buy & sell positions as the smallest possible unit above and below the current spread
         # and we'll work out from there. That way we always have the best price but we don't kill wide
         # and potentially profitable spreads.
-        self.start_position_buy = ticker["buy"] #+ self.instrument['tickSize']
-        self.start_position_sell = ticker["sell"] #- self.instrument['tickSize']
+        self.start_position_buy = ticker["buy"] + GetQuoteTick(ticker["buy"])
+        self.start_position_sell = ticker["sell"] - GetQuoteTick(ticker["sell"])
 
         # If we're maintaining spreads and we already have orders in place,
         # make sure they're not ours. If they are, we need to adjust, otherwise we'll
@@ -224,8 +228,10 @@ class OrderManager:
             if index < 0 and start_position > self.start_position_sell:
                 start_position = self.start_position_buy
 
-        tickSize = 0.50
-        return math.toNearest(start_position * (1 + settings.INTERVAL) ** index, tickSize)
+        # todo this needs to based of price
+        price = start_position * (1 + settings.INTERVAL) ** index
+        tickSize = GetQuoteTick(price)
+        return math.toNearest(price, tickSize)
 
 
     ###
@@ -240,6 +246,9 @@ class OrderManager:
             quantity = round(quantity / settings.ORDER_STEP_SIZE) * settings.ORDER_STEP_SIZE
         else:
             quantity = settings.ORDER_START_SIZE + ((abs(index) - 1) * settings.ORDER_STEP_SIZE)
+
+        # round to nearest QUOTE_SIZE
+        quantity = math.toNearest(quantity, settings.QUOTE_SIZE)
 
         price = self.get_price_offset(index)
 
@@ -296,7 +305,6 @@ class OrderManager:
                         # If price has changed, and the change is more than our RELIST_INTERVAL, amend.
                         desired_order['price'] != order['order_info']['price'] and
                         abs((float(desired_order['price']) / float(order['order_info']['price'])) - 1) > settings.RELIST_INTERVAL):
-                    logger.info(f"desired order {desired_order} {order}")
                     to_amend.append({'ref_order_id': order['id'], 'new_qty': str(float(order['executed_qty']) + float(desired_order['qty'])),
                                      'new_price': desired_order['price'], 'side': order['order_info']['side']})
             except IndexError:
@@ -331,9 +339,8 @@ class OrderManager:
                 logger("Amend failed: %s" % e)
 
         if len(to_create) > 0:
-            logger.info("Creating %d orders:" % (len(to_create)))
             for order in reversed(to_create):
-                logger.info("%4s %10s %s @ %s" % (order['side'], order['symbol'], order['qty'], order['price']))
+                logger.info("Creating %4s %10s %s @ %s" % (order['side'], order['symbol'], order['qty'], order['price']))
             self.exchange.create_orders(to_create)
 
         # Could happen if we exceed a delta limit
@@ -400,25 +407,39 @@ class OrderManager:
     def print_status(self):
         """Print the current MM status."""
 
-        position = self.exchange.get_position()
-        self.running_qty = self.exchange.get_delta()
+        #position = self.exchange.get_position()
+        #self.running_qty = self.exchange.get_delta()
 
-        logger.info("Current Position: %f" % self.running_qty)
-        if settings.CHECK_POSITION_LIMITS:
-            logger.info("Position limits: %d/%d" % (settings.MIN_POSITION, settings.MAX_POSITION))
-        if position['qty'] != 0:
-            logger.info("Avg Cost Price: %f" % (float(position['executed_vwap'])))
-            logger.info("Avg Entry Price: %f" % (float(position['entry_vwap'])))
-        logger.info("Quantity Traded This Run: %d" % (self.running_qty - self.starting_qty))
+        #logger.info("Current Position: %f" % self.running_qty)
+        #if settings.CHECK_POSITION_LIMITS:
+        #    logger.info("Position limits: %d/%d" % (settings.MIN_POSITION, settings.MAX_POSITION))
+        #if position['qty'] != 0:
+        #    logger.info("Avg Cost Price: %f" % (float(position['executed_vwap'])))
+        #    logger.info("Avg Entry Price: %f" % (float(position['entry_vwap'])))
+        #logger.info("Quantity Traded This Run: %d" % (self.running_qty - self.starting_qty))
+
+    def print_orderbook(self):
+        """Print the market makers orderbook, for debugging."""
+        orderbook = self.exchange.get_orders()
+        # sort BUYS by price descending
+        buys = sorted([o for o in orderbook if o['order_info']['side'] == 'BUY'], key=lambda x: float(x['order_info']['price']), reverse=False)
+        # sort SELLS by price ascending
+        sells = sorted([o for o in orderbook if o['order_info']['side'] == 'SELL'], key=lambda x: float(x['order_info']['price']), reverse=False)
+        for buy in buys:
+            logger.info(f"BUY {self.instrument}: {buy['order_info']['qty']} @ {buy['order_info']['price']}")
+        for sell in sells:
+            logger.info(f"SELL {self.instrument}: {sell['order_info']['qty']} @ {sell['order_info']['price']}")
 
     def run_loop(self):
         while True:
-            self.check_file_change()
-            time.sleep(settings.LOOP_INTERVAL)
+            with self.condition:
+                self.check_file_change()
+                self.condition.wait(settings.LOOP_INTERVAL)
 
-            self.check_sanity()
-            self.print_status()
-            self.place_orders()
+                self.check_sanity()
+                self.print_status()
+                self.place_orders()
+                self.print_orderbook()
 
 def run():
     logger.info('TrueX Market Maker Version: %s\n' % constants.VERSION)

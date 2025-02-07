@@ -23,7 +23,14 @@ API_USER = environ['TRUEX_USER']
 ########################################################################################################################
 
 # Instrument to market make on TrueX.
-SYMBOL = "BTC-PYUSD"
+SYMBOL = "ETH-PYUSD"
+
+########################################################################################################################
+# TICK SIZE
+########################################################################################################################
+
+TICK_SIZE = 0.50
+QUOTE_SIZE = 0.0001
 
 ########################################################################################################################
 # Order Size & Spread
@@ -37,13 +44,13 @@ ORDER_PAIRS = 6
 # [ORDER_START_SIZE + ORDER_STEP_SIZE (Level -1)]
 # ORDER_START_SIZE and ORDER_STEP_SIZE must be multiplication of instrument lot size.
 ORDER_START_SIZE = 0.1
-ORDER_STEP_SIZE = 0.0001
+ORDER_STEP_SIZE = 0.1
 
 # Distance between successive orders, as a percentage (example: 0.005 for 0.5%)
-INTERVAL = 0.005
+INTERVAL = 0.01
 
-# Minimum spread to maintain, in percent, between asks & bids
-MIN_SPREAD = 0.01
+# Minimum spread to maintain, in percent, between asks & bids (example: 0.01 for 1%)
+MIN_SPREAD = 0.005
 
 # If True, market-maker will place orders just inside the existing spread and work the interval % outwards,
 # rather than starting in the middle and killing potentially profitable spreads.

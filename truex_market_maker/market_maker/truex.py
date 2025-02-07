@@ -21,7 +21,7 @@ class TrueX(object):
 
     def __init__(self, rest_url=None,
                  ws_url=None, symbol=None, apiKey=None, apiSecret=None,
-                 orderIDPrefix='mm_truex_', shouldWSAuth=True, postOnly=False, timeout=7):
+                 orderIDPrefix='mm_truex_', shouldWSAuth=True, postOnly=False, timeout=7, condition=None):
         """Init connector."""
         self.rest_url = rest_url
         self.ws_url = ws_url
@@ -38,7 +38,7 @@ class TrueX(object):
         self.amendId = 0
 
         # Create websocket for streaming data
-        self.ws = TruexWebsocket()
+        self.ws = TruexWebsocket(condition=condition)
         self.ws.Connect(ws_url)
         self.rest = TruexRESTClient()
 
@@ -50,7 +50,6 @@ class TrueX(object):
         if symbol is None:
             symbol = self.symbol
         self.ws.SubscribeToInstrument(symbol)
-        self.ws.SubscribeToTicker(symbol)
 
     def BaseBalance(self):
         base_asset_id = self.ws.GetInstrumentBaseAsset(self.symbol)
@@ -130,6 +129,12 @@ class TrueX(object):
     def CancelOrder(self, orderID):
         """Cancel an order."""
         return self.rest.CancelOrder(orderID)
+
+    def Market(self, symbol=None):
+        """Get market data."""
+        if symbol is None:
+            symbol = self.symbol
+        self.ws.SubscribeToTicker(symbol)
 
     def Ticker(self, symbol=None):
         """Get ticker data."""
