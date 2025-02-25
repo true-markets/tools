@@ -54,6 +54,10 @@ class TruexRESTClient(object):
         url = self.base_url + '/client'
         return self.__Request('GET', url)
 
+    def GetInstrument(self, symbol):
+        url = self.base_url + '/instrument?symbol=' + symbol
+        return self.__Request('GET', url)
+
     def GetBalance(self, asset):
         url = self.base_url + '/balance?asset_id=' + asset
         return self.__Request('GET', url)

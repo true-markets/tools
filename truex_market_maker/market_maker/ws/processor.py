@@ -32,14 +32,14 @@ class TruexWebsocket(object):
 
     """TruexWebsocket is a websocket client that connects to the Truex server and listens for messages."""
 
-    def __init__(self, condition=None):
+    def __init__(self, queue=None):
         self.__reset()
         self.thread = None
         self.loop = None
         self.recv_task = None
         self.send_task = None
         self.send_queue = None
-        self.condition = condition
+        self.queue = queue
         self.auth = WebsocketAuth(settings.API_KEY, settings.API_SECRET)
 
     def __reset(self):
@@ -263,8 +263,8 @@ class TruexWebsocket(object):
                                 self.seqnum[chn] = msg["seqnum"]
                                 self.data[chn][msg["data"]["info"]["symbol"]] = msg["data"]
                                 self.symbol[msg["data"]["id"]] = msg["data"]["info"]["symbol"]
-                                with self.condition:
-                                    self.condition.notify_all()
+                                if self.queue:
+                                    self.queue.put(msg["data"]["info"]["symbol"])
                             if upd == "UPDATE":
                                 if msg["seqnum"]  != self.seqnum[chn]:
                                     gap = msg["seqnum"] - self.seqnum[chn]
@@ -311,8 +311,8 @@ class TruexWebsocket(object):
                             logger.info(f"Trade {symbol}: {msg}")
                             self.data[chn][symbol] = msg["data"]
                             self.seqnum[chn] = str(int(msg["seqnum"]) + 1)
-                            with self.condition:
-                                self.condition.notify_all()
+                            if self.queue:
+                                self.queue.put(symbol)
 
                         else:
                             raise Exception(f"Unknown channel: {chn}")

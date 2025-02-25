@@ -21,7 +21,7 @@ class TrueX(object):
 
     def __init__(self, rest_url=None,
                  ws_url=None, symbol=None, apiKey=None, apiSecret=None,
-                 orderIDPrefix='mm_truex_', shouldWSAuth=True, postOnly=False, timeout=7, condition=None):
+                 orderIDPrefix='mm-', orderNode=0, shouldWSAuth=True, postOnly=False, timeout=7, queue=None):
         """Init connector."""
         self.rest_url = rest_url
         self.ws_url = ws_url
@@ -30,15 +30,16 @@ class TrueX(object):
         self.apiKey = apiKey
         self.apiSecret = apiSecret
         self.apiClient = 0
+        self.orderNode = orderNode
         if len(orderIDPrefix) > 18:
             raise ValueError("settings.ORDERID_PREFIX must be at most 18 characters long!")
-        self.orderIDPrefix = orderIDPrefix
+        self.orderIDPrefix = orderIDPrefix + str(self.orderNode) + "-"
         self.retries = 0  # initialize counter
         self.orderId = 0
         self.amendId = 0
 
         # Create websocket for streaming data
-        self.ws = TruexWebsocket(condition=condition)
+        self.ws = TruexWebsocket(queue=queue)
         self.ws.Connect(ws_url)
         self.rest = TruexRESTClient()
 
@@ -50,6 +51,12 @@ class TrueX(object):
         if symbol is None:
             symbol = self.symbol
         self.ws.SubscribeToInstrument(symbol)
+
+    def InstrumentData(self, symbol=None):
+        """Get instrument id."""
+        if symbol is None:
+            symbol = self.symbol
+        return self.rest.GetInstrument(symbol)
 
     def BaseBalance(self):
         base_asset_id = self.ws.GetInstrumentBaseAsset(self.symbol)
@@ -93,7 +100,7 @@ class TrueX(object):
         order = {
             'external_id': self.orderIDPrefix + str(self.orderId),
             'info': {
-                'client_id': order['client_id'],
+                'client_id': str(order['client_id']),
                 'instrument_id': self.ws.GetInstrumentId(order['symbol']),
                 'qty': order['qty'],
                 'price': order['price'],

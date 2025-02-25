@@ -7,10 +7,10 @@ import logging
 ########################################################################################################################
 
 # API URL.
-HOST = "10.10.10.13"
-REST_PORT = 9742
+HOST = environ['TRUEX_HOST']
+REST_PORT = environ['TRUEX_REST_PORT']
 BASE_REST_URL = f"http://{HOST}:{REST_PORT}/api/v1"
-WS_PORT = 4444
+WS_PORT = environ['TRUEX_WS_PORT']
 BASE_WS_URL = f"ws://{HOST}:{WS_PORT}"
 
 # The TrueX API requires permanent API keys.
@@ -22,8 +22,8 @@ API_USER = environ['TRUEX_USER']
 # Target
 ########################################################################################################################
 
-# Instrument to market make on TrueX.
-SYMBOL = "ETH-PYUSD"
+# Instruments to market make on TrueX.
+SYMBOLS = ["ETH-PYUSD", "BTC-PYUSD"]
 
 ########################################################################################################################
 # TICK SIZE
@@ -84,6 +84,8 @@ MAX_POSITION = 10000
 # unexpected delta. Be careful.
 POST_ONLY = False
 
+# If true, cancel any open orders from previous runs first
+CANCEL_ORDERS_ON_START = False
 # If True, cancel all open orders on exit
 CANCEL_ORDERS_ON_EXIT = True
 
