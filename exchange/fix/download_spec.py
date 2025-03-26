@@ -17,7 +17,7 @@ os.makedirs(save_dir, exist_ok=True)
 for xml_file in xml_files:
     file_url = base_url + xml_file
     response = requests.get(file_url)
-    
+
     if response.status_code == 200:
         file_path = os.path.join(save_dir, xml_file)
         with open(file_path, 'wb') as file:
