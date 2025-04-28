@@ -1,4 +1,4 @@
-iUPDATimport urwid
+import urwid
 import uuid
 import quickfix as fix
 import quickfix50sp2 as fix50sp2
