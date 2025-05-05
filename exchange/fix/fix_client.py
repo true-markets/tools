@@ -266,6 +266,10 @@ class MarketDataWidget(urwid.WidgetWrap):
         elif side == "OFFER":
             self.sell_qty = qty
             self.sell_price = price
+        elif side == "OFFER/TRADE":
+            self.sell_qty -= qty
+        elif side == "BID/TRADE":
+            self.buy_qty -= qty
         # Update the displayed text.
         self.text_widget.set_text(self._get_market_data_text())
 
@@ -507,6 +511,12 @@ class FIXApp(fix.Application):
                 md_type = "BID"
             elif md_entry_type.getValue() == fix.MDEntryType_OFFER:
                 md_type = "OFFER"
+            elif md_entry_type.getValue() == fix.MDEntryType_TRADE:
+                md_aggressor_side = group.getField(2446)
+                if md_aggressor_side == "1": # buy
+                    md_type = "OFFER/TRADE"
+                elif md_aggressor_side == "2": # sell
+                    md_type = "BID/TRADE"
 
             if md_type:
                 self.market_data_queue.put((symbol.getValue(), md_type, md_entry_size.getValue(), md_entry_px.getValue()))
