@@ -34,7 +34,7 @@ def QueryRest(ctx, method, path, body = None):
         port = os.getenv("TRUEX_REST_PORT")
         url = f"http://{host}:{port}"
     elif ctx.env.lower() == "dev":
-        url = "http://dev1.truex.co:9472"
+        url = "http://dev1.truex.co:9742"
     elif ctx.env.lower() == "uat":
         url = "http://uat.truex.co:9742"
 
