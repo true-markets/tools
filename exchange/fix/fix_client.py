@@ -358,6 +358,7 @@ class FIXApp(fix.Application):
         self.market_data_queue = market_data_queue
         self.sessionID = None
         self.app_id = app_id  # Identifier for the FIX session
+        self.reset_seq_num = True
 
     def onCreate(self, sessionID):
         self.message_queue.put(f"Session created: {sessionID}")
@@ -386,7 +387,7 @@ class FIXApp(fix.Application):
             sending_time =  datetime.utcnow().strftime('%Y%m%d-%H:%M:%S.%f')[:-3]
             # Retrieve other required fields
             msg_type = message.getHeader().getField(fix.MsgType()).getString()  # MsgType (35)
-            msg_seq_num = message.getHeader().getField(fix.MsgSeqNum()).getString()  # MsgSeqNum (34)
+            msg_seq_num = 1 if self.reset_seq_num else message.getHeader().getField(fix.MsgSeqNum()).getString()  # MsgSeqNum (34)
             sender_comp_id = message.getHeader().getField(fix.SenderCompID()).getString()  # SenderCompID (49)
             target_comp_id = message.getHeader().getField(fix.TargetCompID()).getString()  # TargetCompID (56)
 
@@ -395,7 +396,8 @@ class FIXApp(fix.Application):
 
             message.getHeader().setField(52, sending_time)
             # Set ResetSeqNum
-            message.setField(fix.ResetSeqNumFlag(True))
+            if self.reset_seq_num:
+                message.setField(fix.ResetSeqNumFlag(True))
             # Set Username (Tag 553)
             message.setField(fix.Username(self.apiKeyId))  # Set tag 553
             # Set Password (Tag 554)
