@@ -537,13 +537,21 @@ class FIXApp(fix.Application):
         GetOrders(self)
 
     @ensure_session_id
-    def send_order(self, symbol, side, price, size, client_id):
+    def send_order(self, symbol, side, order_type, tif, price, size, client_id):
         message = fix50sp2.NewOrderSingle()
         message.setField(fix.ClOrdID(str(uuid.uuid4())))
         message.setField(fix.Symbol(symbol))
         message.setField(fix.Side(fix.Side_BUY))
-        message.setField(fix.OrdType(fix.OrdType_LIMIT))
-        message.setField(fix.TimeInForce(fix.TimeInForce_GOOD_TILL_CANCEL))
+        if order_type == "MARKET":
+            message.setField(fix.OrdType(fix.OrdType_MARKET))
+        else:
+            message.setField(fix.OrdType(fix.OrdType_LIMIT))
+
+        if tif == "IOC":
+            message.setField(fix.TimeInForce(fix.TimeInForce_IMMEDIATE_OR_CANCEL))
+        else:
+            message.setField(fix.TimeInForce(fix.TimeInForce_GOOD_TILL_CANCEL))
+
 
         message.setField(fix.Side(side))
         message.setField(fix.Price(price))
@@ -563,13 +571,16 @@ class FIXApp(fix.Application):
             self.message_queue.put("Failed to send order: FIX session not found.")
 
     @ensure_session_id
-    def modify_order(self, orig_cl_ord_id, client_id, new_price, new_qty):
+    def modify_order(self, orig_cl_ord_id, client_id, new_price, new_qty, new_order_type=None):
         message = fix50sp2.OrderCancelReplaceRequest()
         message.setField(fix.ClOrdID(str(uuid.uuid4())))
         message.setField(fix.OrigClOrdID(str(orig_cl_ord_id)))
         message.setField(fix.Price(new_price))
         message.setField(fix.OrderQty(new_qty))
-        message.setField(fix.OrdType(fix.OrdType_LIMIT))
+        if new_order_type == "MARKET":
+            message.setField(fix.OrdType(fix.OrdType_MARKET))
+        else:
+            message.setField(fix.OrdType(fix.OrdType_LIMIT))
 
         # Add PartyIDs group
         party_group = fix50sp2.OrderCancelReplaceRequest.NoPartyIDs()
@@ -768,16 +779,18 @@ class FIXInterface:
             else:
                 self.fix_app.list_orders()
         elif cmd == "buy" or cmd == "sell":
-            if len(parts) < 4 or len(parts) > 5:
-                self.display_message("Usage: buy|sell <symbol> <price> <size> [client_index]")
+            if len(parts) < 6 or len(parts) > 7:
+                self.display_message("Usage: buy|sell <symbol> <type> <tif> <price> <size> [client_index]")
             else:
                 try:
                     symbol = parts[1].upper()
+                    order_type = parts[2].upper()  # Order type (MARKET or LIMIT)
+                    tif = parts[3].upper()  # Time in force (GTC, IOC, FOK, etc.)
                     # allow for price to be a range via double dot notation,
                     # i.e 100..105 will generate 6 orders 100, 101, 102, 103, 104, 105
                     # increment based on the number of digits after the dot
-                    if ".." in parts[2]:
-                        price_range = parts[2].split("..")
+                    if ".." in parts[4]:
+                        price_range = parts[4].split("..")
                         price_start = float(price_range[0])
                         price_end = float(price_range[1])
                         price_increment = 1 if price_start < price_end else -1
@@ -795,20 +808,20 @@ class FIXInterface:
 
                         price = price_start
                         while (price_increment == 1 and price <= price_end) or (price_increment == -1 and price >= price_end):
-                            size = float(parts[3])
-                            client_index = self.client_index if len(parts) == 4 else int(parts[4])
+                            size = float(parts[5])
+                            client_index = self.client_index if len(parts) == 6 else int(parts[6])
                             if client_index < 0 or client_index >= len(self.fix_app.clientIds):
                                 self.display_message("Invalid client index.")
                                 return
                             client_id = self.fix_app.clientIds[client_index]
                             side_enum = fix.Side_BUY if cmd == "buy" else fix.Side_SELL
-                            self.fix_app.send_order(symbol, side_enum, price, size, client_id)
+                            self.fix_app.send_order(symbol, side_enum, order_type, tif, price, size, client_id)
                             price += (price_increment * price_step)
                             price = round(price, price_digits)
                     else:
-                        price = float(parts[2])
-                        size = float(parts[3])
-                        client_index = self.client_index if len(parts) == 4 else int(parts[4])
+                        price = float(parts[4])
+                        size = float(parts[5])
+                        client_index = self.client_index if len(parts) == 6 else int(parts[6])
 
                         if client_index < 0 or client_index >= len(self.fix_app.clientIds):
                             self.display_message("Invalid client index.")
@@ -817,18 +830,19 @@ class FIXInterface:
                         client_id = self.fix_app.clientIds[client_index]
                         side_enum = fix.Side_BUY if cmd == "buy" else fix.Side_SELL
 
-                        self.fix_app.send_order(symbol, side_enum, price, size, client_id)
+                        self.fix_app.send_order(symbol, side_enum, order_type, tif, price, size, client_id)
                 except ValueError:
-                    self.display_message("Invalid parameters. Usage: buy|sell <symbol> <price> <size> [client_index]")
+                    self.display_message("Invalid parameters. Usage: buy|sell <symbol> <type> <tif> <price> <size> [client_index]")
         elif cmd == "modify":
-            if len(parts) < 4 or len(parts) > 5:
-                self.display_message("Usage: modify <orig_cl_ord_id> <new_price> <new_size> [client_index]")
+            if len(parts) < 5 or len(parts) > 6:
+                self.display_message("Usage: modify <orig_cl_ord_id> <new_price> <new_size> <new_type> [client_index]")
             else:
                 try:
                     orig_cl_ord_id = parts[1]
                     new_price = float(parts[2])
                     new_qty = float(parts[3])
-                    client_index = self.client_index if len(parts) == 4 else int(parts[4])
+                    new_type = parts[4].upper() if len(parts) > 4 else None
+                    client_index = self.client_index if len(parts) == 5 else int(parts[5])
 
                     if client_index < 0 or client_index >= len(self.fix_app.clientIds):
                         self.display_message("Invalid client index.")
@@ -842,9 +856,9 @@ class FIXInterface:
                     client_id = self.fix_app.clientIds[client_index]
 
                     # Call the modify_order method with the parsed parameters
-                    self.fix_app.modify_order(orig_cl_ord_id, client_id, new_price, new_qty)
+                    self.fix_app.modify_order(orig_cl_ord_id, client_id, new_price, new_qty, new_type)
                 except ValueError as e:
-                    self.display_message(f"Invalid parameters: {e}. Usage: modify <orig_cl_ord_id> <new_price> <new_size> [client_index] ")
+                    self.display_message(f"Invalid parameters: {e}. Usage: modify <orig_cl_ord_id> <new_price> <new_size> <new_type> [client_index] ")
         elif cmd == "cancel":
             if len(parts) < 2 or len(parts) > 3:
                 self.display_message("Usage: cancel <orig_cl_ord_id> [client_index]")
@@ -890,17 +904,17 @@ class FIXInterface:
         """
         help_text = (
             "Available FIX commands:\n"
-            "  help                                                           Show this help message\n"
-            "  use <client> <idx>                                             Use a specific value for subsequent commands\n"
-            "  list                                                           List active orders\n"
-            "  market_data / md                                               Display market data\n"
-            "  buy|sell <symbol> <price> <size> [client_index]                Send a new order\n"
-            "  modify <orig_cl_ord_id> <new_price> <new_size> [client_index]  Modify an existing order\n"
-            "  cancel <orig_cl_ord_id> [client_index]                         Cancel an existing order\n"
-            "  subscribe <md_req_id> <symbol>                                 Subscribe to market data\n"
-            "  unsubscribe <md_req_id>                                        Unsubscribe from market data\n"
-            "  logout                                                         Logout from FIX session\n"
-            "  exit / quit                                                    Exit the application\n\n"
+            "  help                                                                     Show this help message\n"
+            "  use <client> <idx>                                                       Use a specific value for subsequent commands\n"
+            "  list                                                                     List active orders\n"
+            "  market_data / md                                                         Display market data\n"
+            "  buy|sell <symbol> <type> <tif> <price> <size> [client_index]             Send a new order\n"
+            "  modify <orig_cl_ord_id> <new_price> <new_size> <new_type> [client_index] Modify an existing order\n"
+            "  cancel <orig_cl_ord_id> [client_index]                                   Cancel an existing order\n"
+            "  subscribe <md_req_id> <symbol>                                           Subscribe to market data\n"
+            "  unsubscribe <md_req_id>                                                  Unsubscribe from market data\n"
+            "  logout                                                                   Logout from FIX session\n"
+            "  exit / quit                                                              Exit the application\n\n"
             "Note: arguments in square brackets are optional if set using the 'use' command"
         )
         for line in help_text.split('\n'):
