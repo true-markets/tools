@@ -1,27 +1,31 @@
 """Truex API Connector."""
+
 from __future__ import absolute_import
-import requests
-import time
-import datetime
-import json
-import base64
-import uuid
-import asyncio
 
-from market_maker.utils import constants, errors, log
-from market_maker.ws.processor import TruexWebsocket
 from market_maker.rest.client import TruexRESTClient
+from market_maker.utils import log
+from market_maker.ws.processor import TruexWebsocket
 
-logger = log.setup_custom_logger('root')
+logger = log.setup_custom_logger("truex")
 
 
-class TrueX(object):
-
+class TrueX:
     """TrueX API Connector."""
 
-    def __init__(self, rest_url=None,
-                 ws_url=None, symbol=None, apiKey=None, apiSecret=None,
-                 orderIDPrefix='mm-', orderNode=0, shouldWSAuth=True, postOnly=False, timeout=7, queue=None):
+    def __init__(
+        self,
+        rest_url=None,
+        ws_url=None,
+        symbol=None,
+        apiKey=None,
+        apiSecret=None,
+        orderIDPrefix="mm-",
+        orderNode=0,
+        shouldWSAuth=True,
+        postOnly=False,
+        timeout=7,
+        queue=None,
+    ):
         """Init connector."""
         self.rest_url = rest_url
         self.ws_url = ws_url
@@ -32,7 +36,9 @@ class TrueX(object):
         self.apiClient = 0
         self.orderNode = orderNode
         if len(orderIDPrefix) > 18:
-            raise ValueError("settings.ORDERID_PREFIX must be at most 18 characters long!")
+            raise ValueError(
+                "settings.ORDERID_PREFIX must be at most 18 characters long!"
+            )
         self.orderIDPrefix = orderIDPrefix + str(self.orderNode) + "-"
         self.retries = 0  # initialize counter
         self.orderId = 0
@@ -60,14 +66,14 @@ class TrueX(object):
 
     def BaseBalance(self):
         base_asset_id = self.ws.GetInstrumentBaseAsset(self.symbol)
-        if (base_asset_id is None):
+        if base_asset_id is None:
             return {}
         return self.rest.GetBalance(base_asset_id)
 
     def QuoteBalance(self):
         """Get your balance."""
         quote_asset_id = self.ws.GetInstrumentQuoteAsset(self.symbol)
-        if (quote_asset_id is None):
+        if quote_asset_id is None:
             return {}
         return self.rest.GetBalance(quote_asset_id)
 
@@ -82,7 +88,9 @@ class TrueX(object):
         openOrders = []
         orders = self.rest.GetOpenOrders()
         for order in orders:
-            if order['external_id'].startswith(self.orderIDPrefix) or order['ref_external_id'].startswith(self.orderIDPrefix):
+            if order["external_id"].startswith(self.orderIDPrefix) or order[
+                "ref_external_id"
+            ].startswith(self.orderIDPrefix):
                 openOrders.append(order)
         return openOrders
 
@@ -98,17 +106,17 @@ class TrueX(object):
 
         self.orderId += 1
         order = {
-            'external_id': self.orderIDPrefix + str(self.orderId),
-            'info': {
-                'client_id': str(order['client_id']),
-                'instrument_id': self.ws.GetInstrumentId(order['symbol']),
-                'qty': order['qty'],
-                'price': order['price'],
-                'side': order['side'],
-                'type': "LIMIT",
-                'tif': "GTC",
-                'exec_inst_flags': ["ALO"] if self.postOnly else [],
-            }
+            "external_id": self.orderIDPrefix + str(self.orderId),
+            "info": {
+                "client_id": str(order["client_id"]),
+                "instrument_id": self.ws.GetInstrumentId(order["symbol"]),
+                "qty": order["qty"],
+                "price": order["price"],
+                "side": order["side"],
+                "type": "LIMIT",
+                "tif": "GTC",
+                "exec_inst_flags": ["ALO"] if self.postOnly else [],
+            },
         }
         return self.rest.PlaceOrder(order)
 
@@ -123,13 +131,13 @@ class TrueX(object):
         """Amend an order."""
         self.amendId += 1
         modify = {
-            'id': order['ref_order_id'],
-            'external_id': self.orderIDPrefix + "mod-" + str(self.amendId),
-            'info': {
-                'client_id': order['client_id'],
-                'new_qty': order['new_qty'],
-                'new_price': order['new_price'],
-            }
+            "id": order["ref_order_id"],
+            "external_id": self.orderIDPrefix + "mod-" + str(self.amendId),
+            "info": {
+                "client_id": order["client_id"],
+                "new_qty": order["new_qty"],
+                "new_price": order["new_price"],
+            },
         }
         return self.rest.AmendOrder(modify)
 

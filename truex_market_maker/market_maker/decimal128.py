@@ -1,5 +1,6 @@
 from decimal import Decimal, localcontext
 
+
 class Decimal128:
     def __init__(self, value):
         """
@@ -164,4 +165,3 @@ class Decimal128:
 
     def __repr__(self):
         return f"Decimal128({self._value_str})"
-

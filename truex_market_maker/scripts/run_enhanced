@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""
+Enhanced TrueX Market Maker with External Data Integration
+
+Usage:
+    ./scripts/run_enhanced [symbol]
+
+This script runs the enhanced market maker with external data providers
+and advanced pricing models.
+
+Environment variables required:
+    TRUEX_HOST, TRUEX_REST_PORT, TRUEX_WS_PORT
+    TRUEX_API_KEY, TRUEX_SECRET_KEY, TRUEX_USER
+
+Example:
+    ./scripts/run_enhanced BTC-PYUSD
+"""
+
+import os
+import sys
+
+# Add the project root to Python path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from market_maker.market_maker import run_enhanced
+
+if __name__ == "__main__":
+    run_enhanced()

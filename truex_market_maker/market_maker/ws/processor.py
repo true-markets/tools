@@ -1,19 +1,21 @@
-import threading
 import asyncio
-import websockets
-import queue
-import json
-import time
-import hmac
-import hashlib
 import base64
+import hashlib
+import hmac
+import json
+import queue
+import threading
+import time
+
+import websockets
 
 from market_maker.settings import settings
 from market_maker.utils import log
 
-logger = log.setup_custom_logger('root')
+logger = log.setup_custom_logger("websocket")
 
-class WebsocketAuth(object):
+
+class WebsocketAuth:
     def __init__(self, apiKey, apiSecret):
         self.apiKey = apiKey
         self.apiSecret = apiSecret
@@ -22,14 +24,16 @@ class WebsocketAuth(object):
         timestamp = str(int(time.time()))
         message = timestamp + "TRUEXWS" + self.apiKey
         hmac_key = str.encode(self.apiSecret)
-        signature = hmac.new(hmac_key, message.encode('utf-8'), digestmod=hashlib.sha256).digest()
+        signature = hmac.new(
+            hmac_key, message.encode("utf-8"), digestmod=hashlib.sha256
+        ).digest()
         request["key"] = self.apiKey
         request["timestamp"] = timestamp
-        request["signature"] = base64.b64encode(signature).decode('utf-8')
+        request["signature"] = base64.b64encode(signature).decode("utf-8")
         return request
 
-class TruexWebsocket(object):
 
+class TruexWebsocket:
     """TruexWebsocket is a websocket client that connects to the Truex server and listens for messages."""
 
     def __init__(self, queue=None):
@@ -51,13 +55,13 @@ class TruexWebsocket(object):
 
     def Position(self, symbol):
         """Get your position."""
-        if not "POSITION" in self.data:
+        if "POSITION" not in self.data:
             self.data["POSITION"] = {}
 
         positions = self.data["POSITION"]
         if symbol not in positions:
             # stub out a position if we don't have one
-            positions[symbol] = {'qty': 0, 'executed_vwap': 0, 'entry_vwap': 0}
+            positions[symbol] = {"qty": 0, "executed_vwap": 0, "entry_vwap": 0}
 
         return positions[symbol]
 
@@ -76,26 +80,39 @@ class TruexWebsocket(object):
             if symbol not in instrument:
                 return None
             # stub out a ticker if we don't have one
-            ref_px = instrument[symbol]['info']['reference_price']
-            ticker['mid'] = ticker['buy'] = ticker['sell'] = ticker['last'] = float(ref_px)
+            ref_px = instrument[symbol]["info"]["reference_price"]
+            ticker["mid"] = ticker["buy"] = ticker["sell"] = ticker["last"] = float(
+                ref_px
+            )
         else:
-            ticker_info = tickers[symbol]['info']
-            if ticker_info['best_ask']['price'] == '0' or ticker_info['best_bid']['price'] == '0' \
-                or ticker_info['best_bid']['price'] == '-170141183460469231731.687303715884105728' \
-                or ticker_info['best_ask']['price'] == '170141183460469231731.687303715884105727':
+            ticker_info = tickers[symbol]["info"]
+            if (
+                ticker_info["best_ask"]["price"] == "0"
+                or ticker_info["best_bid"]["price"] == "0"
+                or ticker_info["best_bid"]["price"]
+                == "-170141183460469231731.687303715884105728"
+                or ticker_info["best_ask"]["price"]
+                == "170141183460469231731.687303715884105727"
+            ):
                 instrument = self.data["INSTRUMENT"]
-                ref_px = instrument[symbol]['info']['reference_price']
-                ticker['mid'] = ticker['buy'] = ticker['sell'] = ticker['last'] = float(ref_px)
+                ref_px = instrument[symbol]["info"]["reference_price"]
+                ticker["mid"] = ticker["buy"] = ticker["sell"] = ticker["last"] = float(
+                    ref_px
+                )
             else:
                 ticker = {
-                    'mid': (float(ticker_info['best_bid']['price']) + float(ticker_info['best_ask']['price'])) // 2.,
-                    'buy': float(ticker_info['best_bid']['price']),
-                    'sell': float(ticker_info['best_ask']['price']),
-                    'last': float(ticker_info['last_trade']['price'])
+                    "mid": (
+                        float(ticker_info["best_bid"]["price"])
+                        + float(ticker_info["best_ask"]["price"])
+                    )
+                    // 2.0,
+                    "buy": float(ticker_info["best_bid"]["price"]),
+                    "sell": float(ticker_info["best_ask"]["price"]),
+                    "last": float(ticker_info["last_trade"]["price"]),
                 }
 
-        logger.info(f"Ticker info: {ticker_info}")
-        logger.info(f"Ticker info: {ticker}")
+        logger.debug(f"Ticker info: {ticker_info}")
+        logger.debug(f"Ticker info: {ticker}")
         return ticker
 
     def IsMarketOpen(self, symbol):
@@ -110,7 +127,7 @@ class TruexWebsocket(object):
             logger.error(f"Unknown symbol: {symbol}")
             return False
 
-        logger.info(f"{symbol} status: {symbols[symbol]['status']}")
+        logger.debug(f"{symbol} status: {symbols[symbol]['status']}")
         return symbols[symbol]["status"] == "ACTIVE"
 
     def GetInstrumentId(self, symbol):
@@ -138,58 +155,47 @@ class TruexWebsocket(object):
         """Subscribe to instrument's details/updates."""
         request = {
             "type": "SUBSCRIBE",
-            "item_names": [
-                symbol
-            ],
-            "channels": [
-                "INSTRUMENT"
-            ]
+            "item_names": [symbol],
+            "channels": ["INSTRUMENT"],
         }
         logger.info(f"Subscribing to {symbol}")
-        asyncio.run_coroutine_threadsafe(self.send_queue.put(json.dumps(self.auth(request))), self.loop)
-
+        asyncio.run_coroutine_threadsafe(
+            self.send_queue.put(json.dumps(self.auth(request))), self.loop
+        )
 
     def UnsubscribeFromInstrument(self, symbol):
         """Unsubscribe from instrument's details/updates."""
         request = {
             "type": "UNSUBSCRIBE",
-            "item_names": [
-                symbol
-            ],
-            "channels": [
-                "INSTRUMENT"
-            ]
+            "item_names": [symbol],
+            "channels": ["INSTRUMENT"],
         }
-        asyncio.run_coroutine_threadsafe(self.send_queue.put(json.dumps(self.auth(request))), self.loop)
+        asyncio.run_coroutine_threadsafe(
+            self.send_queue.put(json.dumps(self.auth(request))), self.loop
+        )
 
     def SubscribeToTicker(self, symbol):
         """Subscribe to ticker data."""
         request = {
             "type": "SUBSCRIBE",
-            "item_names": [
-                symbol
-            ],
-            "channels": [
-                "EBBO",
-                "TRADE"
-            ]
+            "item_names": [symbol],
+            "channels": ["EBBO", "TRADE"],
         }
         logger.info(f"Subscribing to ticker {symbol}")
-        asyncio.run_coroutine_threadsafe(self.send_queue.put(json.dumps(self.auth(request))), self.loop)
+        asyncio.run_coroutine_threadsafe(
+            self.send_queue.put(json.dumps(self.auth(request))), self.loop
+        )
 
     def UnsubscribeFromTicker(self, symbol):
         """Unsubscribe from ticker data."""
         request = {
             "type": "UNSUBSCRIBE",
-            "item_names": [
-                symbol
-            ],
-            "channels": [
-                "EBBO",
-                "TRADE"
-            ]
+            "item_names": [symbol],
+            "channels": ["EBBO", "TRADE"],
         }
-        asyncio.run_coroutine_threadsafe(self.send_queue.put(json.dumps(self.auth(request))), self.loop)
+        asyncio.run_coroutine_threadsafe(
+            self.send_queue.put(json.dumps(self.auth(request))), self.loop
+        )
 
     def Connect(self, url):
         """Asynchronous method to connect to the WebSocket server."""
@@ -223,7 +229,9 @@ class TruexWebsocket(object):
         try:
             async with websockets.connect(url) as ws:
                 self.event.set()
-                self.send_queue = asyncio.Queue()  # Initialize the asyncio.Queue in the same loop
+                self.send_queue = (
+                    asyncio.Queue()
+                )  # Initialize the asyncio.Queue in the same loop
                 self.recv_task = asyncio.create_task(self.__ReceiveMessages(ws))
                 self.send_task = asyncio.create_task(self.__SendMessages(ws))
                 await asyncio.gather(self.recv_task, self.send_task)
@@ -249,11 +257,15 @@ class TruexWebsocket(object):
                     try:
                         if chn == "WEBSOCKET":
                             if upd == "WELCOME":
-                                logger.info(f"Welcome message rcvd: {msg['message']} v{msg['version']} @ {msg['datetime']}.")
+                                logger.info(
+                                    f"Welcome message rcvd: {msg['message']} v{msg['version']} @ {msg['datetime']}."
+                                )
                             elif upd == "SNAPSHOT":
                                 for subscription in msg["subscriptions"]:
                                     if subscription["channel"] == "INSTRUMENT":
-                                        logger.info(f"Currently subscribed: {subscription['item_names']}.")
+                                        logger.info(
+                                            f"Currently subscribed: {subscription['item_names']}."
+                                        )
 
                         elif chn == "INSTRUMENT":
                             if chn not in self.data:
@@ -261,16 +273,22 @@ class TruexWebsocket(object):
 
                             if upd == "SNAPSHOT":
                                 self.seqnum[chn] = msg["seqnum"]
-                                self.data[chn][msg["data"]["info"]["symbol"]] = msg["data"]
-                                self.symbol[msg["data"]["id"]] = msg["data"]["info"]["symbol"]
+                                self.data[chn][msg["data"]["info"]["symbol"]] = msg[
+                                    "data"
+                                ]
+                                self.symbol[msg["data"]["id"]] = msg["data"]["info"][
+                                    "symbol"
+                                ]
                                 if self.queue:
                                     self.queue.put(msg["data"]["info"]["symbol"])
                             if upd == "UPDATE":
-                                if msg["seqnum"]  != self.seqnum[chn]:
+                                if msg["seqnum"] != self.seqnum[chn]:
                                     gap = msg["seqnum"] - self.seqnum[chn]
                                     logger.error(f"Gap of {gap} msgs detected in {chn}")
 
-                                self.data[chn][msg["data"]["info"]["symbol"]] = msg["data"]
+                                self.data[chn][msg["data"]["info"]["symbol"]] = msg[
+                                    "data"
+                                ]
                                 self.seqnum[chn] = str(int(msg["seqnum"]) + 1)
 
                         elif chn == "EBBO":
@@ -304,7 +322,7 @@ class TruexWebsocket(object):
                                 logger.error(f"Unknown instrument id: {instrumentId}")
                                 return
                             symbol = self.symbol[instrumentId]
-                            if msg["seqnum"]  != self.seqnum[chn]:
+                            if msg["seqnum"] != self.seqnum[chn]:
                                 gap = int(msg["seqnum"]) - int(self.seqnum[chn])
                                 logger.error(f"Gap of {gap} msgs detected in {chn}")
 

@@ -2,8 +2,8 @@ import importlib
 import os
 import sys
 
-from market_maker.utils.dotdict import dotdict
 import market_maker._settings_base as baseSettings
+from market_maker.utils.dotdict import dotdict
 
 
 def import_path(fullpath):
@@ -20,14 +20,14 @@ def import_path(fullpath):
     return module
 
 
-userSettings = import_path(os.path.join('./market_maker', 'settings'))
+userSettings = import_path(os.path.join("./market_maker", "settings"))
 symbolSettings = None
 symbol = sys.argv[1] if len(sys.argv) > 1 else None
 if symbol:
     print("Importing symbol settings for %s..." % symbol)
     try:
-        symbolSettings = import_path(os.path.join('..', 'settings-%s' % symbol))
-    except Exception as e:
+        symbolSettings = import_path(os.path.join("..", "settings-%s" % symbol))
+    except Exception:
         print("Unable to find settings-%s.py." % symbol)
 
 # Assemble settings.
