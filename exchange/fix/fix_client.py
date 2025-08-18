@@ -39,7 +39,7 @@ def QueryRest(ctx, method, path, body = None):
     elif ctx.env.lower() == "dev":
         url = "http://dev1.truex.co:10376"
     elif ctx.env.lower() == "uat":
-        url = "http://10.10.20.11:9742"
+        url = "http://uat.truex.co:9742"
 
     url += path
 
