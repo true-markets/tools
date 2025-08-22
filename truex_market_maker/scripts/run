@@ -1,10 +1,105 @@
 #!/usr/bin/env python3
+"""
+TrueX Market Maker - Unified Launcher
+
+This script automatically detects and runs the appropriate mode:
+- Basic Mode: Traditional market making with local data only
+- Enhanced Mode: Advanced features with external data integration and pricing models
+
+Mode Detection:
+    The script automatically detects the mode based on your settings.py configuration.
+    You can also override the mode using command line flags.
+
+Usage:
+    ./scripts/run [options] [symbol]
+
+Options:
+    --basic         Force basic mode (disable enhanced features)
+    --enhanced      Force enhanced mode (enable all enhanced features)
+    --help         Show this help message
+
+Examples:
+    ./scripts/run BTC-PYUSD                    # Auto-detect mode from settings
+    ./scripts/run --enhanced BTC-PYUSD         # Force enhanced mode
+    ./scripts/run --basic BTC-PYUSD            # Force basic mode
+    ./scripts/run BTC-PYUSD ETH-PYUSD          # Multiple symbols
+
+Environment Variables Required:
+    TRUEX_HOST, TRUEX_REST_PORT, TRUEX_WS_PORT
+    TRUEX_API_KEY, TRUEX_SECRET_KEY, TRUEX_USER
+"""
+
+import argparse
 import os
 import sys
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add the project root to Python path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from market_maker import market_maker
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='TrueX Market Maker - Unified Launcher',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Mode Detection:
+  The script automatically detects enhanced mode from your settings.py:
+  - Enhanced mode if USE_EXTERNAL_DATA=True or USE_PRICING_MODELS=True
+  - Basic mode otherwise
+  
+  You can override this behavior with --basic or --enhanced flags.
+
+Examples:
+  ./scripts/run BTC-PYUSD                    # Auto-detect from settings
+  ./scripts/run --enhanced BTC-PYUSD         # Force enhanced mode  
+  ./scripts/run --basic BTC-PYUSD            # Force basic mode
+  ./scripts/run BTC-PYUSD ETH-PYUSD          # Multiple symbols
+        '''
+    )
+    
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        '--basic', 
+        action='store_true',
+        help='Force basic mode (disable enhanced features)'
+    )
+    mode_group.add_argument(
+        '--enhanced', 
+        action='store_true',
+        help='Force enhanced mode (enable external data and pricing models)'
+    )
+    
+    parser.add_argument(
+        'symbols',
+        nargs='*',
+        help='Trading symbols (if not specified, uses settings.SYMBOLS)'
+    )
+    
+    args = parser.parse_args()
+    
+    # Determine enhanced mode
+    enhanced = None  # Auto-detect from settings
+    if args.basic:
+        enhanced = False
+    elif args.enhanced:
+        enhanced = True
+    
+    # Update symbols in settings if provided
+    if args.symbols:
+        try:
+            # Import settings to update SYMBOLS
+            from market_maker import settings
+            settings.SYMBOLS = args.symbols
+            print(f"Using symbols: {', '.join(args.symbols)}")
+        except Exception as e:
+            print(f"Warning: Could not update symbols: {e}")
+    
+    # Import market maker only after argument parsing
+    from market_maker import market_maker
+    
+    # Run the market maker
+    market_maker.run(enhanced=enhanced)
+
 
 if __name__ == "__main__":
-    market_maker.run()
+    main()

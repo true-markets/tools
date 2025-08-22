@@ -127,7 +127,7 @@ ORDERID_PREFIX = "mm-trx-"
 # If any of these files (and this file) changes, reload the bot.
 WATCHED_FILES = [
     join("market_maker", "market_maker.py"),
-    join("market_maker", "truex.py"),
+    join("market_maker", "local_data", "truex.py"),
     join("market_maker", "settings.py"),
 ]
 
@@ -138,6 +138,9 @@ WATCHED_FILES = [
 
 # Enable external market data integration
 USE_EXTERNAL_DATA = True
+
+# Automatically start external data collection when using enhanced mode
+AUTO_START_ENHANCED = True
 
 # External data providers to use
 EXTERNAL_DATA_PROVIDERS = {

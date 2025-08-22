@@ -62,11 +62,14 @@ export TRUEX_USER="your-username"
 # Install dependencies
 pip install -r requirements-external.txt
 
-# Run basic market maker
+# Auto-detect mode from settings (recommended)
 ./scripts/run BTC-PYUSD
 
-# Run enhanced market maker with external data
-./scripts/run_enhanced BTC-PYUSD
+# Force enhanced mode with external data
+./scripts/run --enhanced BTC-PYUSD
+
+# Force basic mode (local data only)  
+./scripts/run --basic BTC-PYUSD
 ```
 
 ## 📦 Installation
@@ -109,6 +112,37 @@ async def test():
 
 asyncio.run(test())
 "
+```
+
+### Mode Detection
+
+The unified launcher automatically detects the appropriate mode:
+
+- **Enhanced Mode**: Activated when `USE_EXTERNAL_DATA=True` or `USE_PRICING_MODELS=True` in settings
+- **Basic Mode**: Used when enhanced features are disabled in settings  
+- **Manual Override**: Use `--enhanced` or `--basic` flags to force a specific mode
+
+### Command Line Help
+
+```bash
+# Show all available options
+./scripts/run --help
+
+# Output:
+TrueX Market Maker - Unified Launcher
+
+Usage: run [options] [symbol]
+
+Options:
+  --basic         Force basic mode (disable enhanced features)
+  --enhanced      Force enhanced mode (enable all enhanced features)  
+  --help         Show this help message
+
+Examples:
+  ./scripts/run BTC-PYUSD                    # Auto-detect from settings
+  ./scripts/run --enhanced BTC-PYUSD         # Force enhanced mode
+  ./scripts/run --basic BTC-PYUSD            # Force basic mode
+  ./scripts/run BTC-PYUSD ETH-PYUSD          # Multiple symbols
 ```
 
 ## ⚙️ Configuration
@@ -173,14 +207,20 @@ ORDER_ADJUSTMENT_COOLDOWN = 15  # seconds between adjustments
 ### Running the Market Maker
 
 ```bash
-# Basic market maker (local data only)
+# Auto-detect mode from settings (recommended)
 ./scripts/run BTC-PYUSD
 
-# Enhanced market maker (with external data)
-./scripts/run_enhanced BTC-PYUSD
+# Enhanced mode with external data
+./scripts/run --enhanced BTC-PYUSD
+
+# Basic mode (local data only)
+./scripts/run --basic BTC-PYUSD
 
 # Multiple symbols
-./scripts/run_enhanced BTC-PYUSD ETH-PYUSD
+./scripts/run BTC-PYUSD ETH-PYUSD
+
+# Override mode with multiple symbols
+./scripts/run --enhanced BTC-PYUSD ETH-PYUSD
 ```
 
 ### Monitoring
@@ -441,16 +481,16 @@ Amending BUY: 0.1 @ 48500.00 to 0.1 @ 48506.00 (+6.00)
 truex_market_maker/
 ├── market_maker/
 │   ├── external_data/      # External data providers
+│   ├── local_data/        # TrueX local data provider (consolidated REST + WebSocket)
+│   │   ├── truex.py       # Unified provider + adapter
+│   │   └── test_interface.py # Interface validation tests
 │   ├── pricing/           # Pricing models
-│   ├── rest/             # REST API client
 │   ├── utils/            # Utility functions
-│   ├── ws/               # WebSocket handling
 │   ├── market_maker.py   # Main market maker logic
 │   ├── order_adjustment.py  # Order adjustment engine
 │   └── settings.py       # Configuration
 ├── scripts/
-│   ├── run              # Basic market maker launcher
-│   └── run_enhanced     # Enhanced market maker launcher
+│   └── run              # Unified market maker launcher
 ├── test/               # Test files
 ├── requirements-external.txt
 ├── pyproject.toml      # Build configuration
