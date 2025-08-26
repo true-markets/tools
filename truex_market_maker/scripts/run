@@ -96,7 +96,7 @@ Examples:
     
     # Import market maker only after argument parsing
     from market_maker import market_maker
-    
+
     # Run the market maker
     market_maker.run(enhanced=enhanced)
 

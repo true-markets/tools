@@ -9,6 +9,7 @@ from market_maker.utils import log
 
 logger = log.setup_custom_logger("external_data")
 
+
 @dataclass
 class MarketData:
     """Market data from an external source."""

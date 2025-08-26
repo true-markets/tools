@@ -75,7 +75,7 @@ class TruexDataProvider(ExternalDataProvider):
 
     def __init__(self, queue_callback=None):
         super().__init__("truex_local")
-        
+
         # REST client setup
         self.base_url = settings.BASE_REST_URL
         self.session = requests.Session()
@@ -83,7 +83,7 @@ class TruexDataProvider(ExternalDataProvider):
         self.session.headers.update({"content-type": "application/json"})
         self.session.headers.update({"accept": "application/json"})
         self.auth = RESTAuth(settings.API_KEY, settings.API_SECRET)
-        
+
         # WebSocket setup
         self.ws_url = settings.BASE_WS_URL
         self.ws_auth = WebsocketAuth(settings.API_KEY, settings.API_SECRET)
@@ -93,21 +93,21 @@ class TruexDataProvider(ExternalDataProvider):
         self.send_queue = None
         self.recv_task = None
         self.send_task = None
-        
+
         # Data storage
         self.ws_data = {}  # Internal WebSocket data store
         self.ws_seqnum = {}
         self.symbol_map = {}  # instrument_id -> symbol mapping
         self.market_data_cache = {}  # symbol -> MarketData
-        
+
         # Queue callback for backward compatibility
         self.queue_callback = queue_callback
-        
+
         # Order management
         self.order_id_counter = 0
         self.amend_id_counter = 0
-        self.order_id_prefix = getattr(settings, 'ORDERID_PREFIX', 'mm-') + "0-"
-        
+        self.order_id_prefix = getattr(settings, "ORDERID_PREFIX", "mm-") + "0-"
+
         logger.info("TruexDataProvider initialized")
 
     # ==========================================
@@ -122,15 +122,15 @@ class TruexDataProvider(ExternalDataProvider):
             if not client_data:
                 logger.error("Failed to connect to REST API")
                 return False
-            
+
             # Start WebSocket connection
             if not self.connected:
                 self._start_websocket()
-                
+
             self.connected = True
             logger.info("Connected to TrueX (REST + WebSocket)")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error connecting to TrueX: {e}")
             return False
@@ -139,7 +139,7 @@ class TruexDataProvider(ExternalDataProvider):
         """Disconnect from TrueX APIs."""
         try:
             self.connected = False
-            
+
             # Stop WebSocket gracefully
             if self.ws_thread and self.ws_thread.is_alive():
                 if self.ws_loop and not self.ws_loop.is_closed():
@@ -149,12 +149,12 @@ class TruexDataProvider(ExternalDataProvider):
                             self.recv_task.cancel()
                         if self.send_task and not self.send_task.done():
                             self.send_task.cancel()
-                        
+
                         # Schedule shutdown on the WebSocket event loop
                         future = asyncio.run_coroutine_threadsafe(
                             self._shutdown_websocket(), self.ws_loop
                         )
-                        
+
                         # Wait for graceful shutdown
                         try:
                             future.result(timeout=3.0)
@@ -163,17 +163,17 @@ class TruexDataProvider(ExternalDataProvider):
                             # Force stop the loop as last resort
                             if not self.ws_loop.is_closed():
                                 self.ws_loop.call_soon_threadsafe(self.ws_loop.stop)
-                        
+
                     except Exception as e:
                         logger.warning(f"Error during WebSocket shutdown: {e}")
-                
+
                 # Wait for thread to finish
                 self.ws_thread.join(timeout=5)
                 if self.ws_thread.is_alive():
                     logger.warning("WebSocket thread did not shutdown gracefully")
-                
+
             logger.info("Disconnected from TrueX")
-            
+
         except Exception as e:
             logger.error(f"Error disconnecting from TrueX: {e}")
 
@@ -182,16 +182,16 @@ class TruexDataProvider(ExternalDataProvider):
         try:
             # Subscribe to instrument data first
             self._ws_subscribe_to_instrument(symbol)
-            
+
             # Subscribe to market data (ticker)
             self._ws_subscribe_to_ticker(symbol)
-            
+
             # Update last update time
             self.last_update[symbol] = time.time()
-            
+
             logger.info(f"Subscribed to {symbol}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error subscribing to {symbol}: {e}")
             return False
@@ -201,16 +201,16 @@ class TruexDataProvider(ExternalDataProvider):
         try:
             self._ws_unsubscribe_from_instrument(symbol)
             self._ws_unsubscribe_from_ticker(symbol)
-            
+
             # Remove from cache
             if symbol in self.market_data_cache:
                 del self.market_data_cache[symbol]
             if symbol in self.last_update:
                 del self.last_update[symbol]
-            
+
             logger.info(f"Unsubscribed from {symbol}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error unsubscribing from {symbol}: {e}")
             return False
@@ -222,26 +222,28 @@ class TruexDataProvider(ExternalDataProvider):
             ticker = self._get_ticker_from_ws(symbol)
             if not ticker:
                 return None
-            
+
             # Convert to MarketData format
             market_data = MarketData(
                 symbol=symbol,
-                bid=ticker.get('buy', 0.0),
-                ask=ticker.get('sell', 0.0),
-                last=ticker.get('last', 0.0),
-                volume=ticker.get('volume', 0.0),  # Volume not available from TrueX ticker
+                bid=ticker.get("buy", 0.0),
+                ask=ticker.get("sell", 0.0),
+                last=ticker.get("last", 0.0),
+                volume=ticker.get(
+                    "volume", 0.0
+                ),  # Volume not available from TrueX ticker
                 timestamp=time.time(),
-                source=self.name
+                source=self.name,
             )
-            
+
             # Cache the data
             self.market_data_cache[symbol] = market_data
-            
+
             # Notify callbacks
             self._notify_callbacks(market_data)
-            
+
             return market_data
-            
+
         except Exception as e:
             logger.error(f"Error getting current data for {symbol}: {e}")
             return None
@@ -290,8 +292,9 @@ class TruexDataProvider(ExternalDataProvider):
             # Filter orders by prefix
             filtered_orders = []
             for order in orders:
-                if (order["external_id"].startswith(self.order_id_prefix) or 
-                    order["ref_external_id"].startswith(self.order_id_prefix)):
+                if order["external_id"].startswith(self.order_id_prefix) or order[
+                    "ref_external_id"
+                ].startswith(self.order_id_prefix):
                     filtered_orders.append(order)
             return filtered_orders
         except Exception as e:
@@ -312,13 +315,15 @@ class TruexDataProvider(ExternalDataProvider):
                     "side": order_data["side"],
                     "type": "LIMIT",
                     "tif": "GTC",
-                    "exec_inst_flags": ["ALO"] if getattr(settings, 'POST_ONLY', False) else [],
+                    "exec_inst_flags": (
+                        ["ALO"] if getattr(settings, "POST_ONLY", False) else []
+                    ),
                 },
             }
-            
+
             url = self.base_url + "/order"
             return self._rest_request("POST", url, body=json.dumps(order))
-            
+
         except Exception as e:
             logger.error(f"Error placing order: {e}")
             return None
@@ -337,17 +342,19 @@ class TruexDataProvider(ExternalDataProvider):
             self.amend_id_counter += 1
             modify = {
                 "id": order_data["ref_order_id"],
-                "external_id": self.order_id_prefix + "mod-" + str(self.amend_id_counter),
+                "external_id": self.order_id_prefix
+                + "mod-"
+                + str(self.amend_id_counter),
                 "info": {
                     "client_id": order_data["client_id"],
                     "new_qty": order_data["new_qty"],
                     "new_price": order_data["new_price"],
                 },
             }
-            
+
             url = self.base_url + "/order"
             return self._rest_request("PATCH", url, body=json.dumps(modify))
-            
+
         except Exception as e:
             logger.error(f"Error amending order: {e}")
             return None
@@ -429,8 +436,8 @@ class TruexDataProvider(ExternalDataProvider):
 
     def _rest_request(self, method: str, url: str, body: str = None):
         """Make a REST API request."""
-        timeout = getattr(settings, 'API_REST_TIMEOUT', 30)
-        
+        timeout = getattr(settings, "API_REST_TIMEOUT", 30)
+
         try:
             logger.debug(f"Sending {method} to {url} with body {body}")
             request = requests.Request(method, url, data=body, auth=self.auth)
@@ -438,7 +445,7 @@ class TruexDataProvider(ExternalDataProvider):
             response = self.session.send(prepped, timeout=timeout)
             response.raise_for_status()
             return response.json()
-            
+
         except requests.exceptions.RequestException as e:
             logger.error(f"Error in request: {e}")
             raise Exception(f"Error in request: {e}")
@@ -451,12 +458,10 @@ class TruexDataProvider(ExternalDataProvider):
 
         self.ws_event = threading.Event()
         self.ws_thread = threading.Thread(
-            target=self._run_ws_loop, 
-            args=(self.ws_url,), 
-            daemon=True
+            target=self._run_ws_loop, args=(self.ws_url,), daemon=True
         )
         self.ws_thread.start()
-        
+
         # Wait for setup
         setup = self.ws_event.wait(10)
         if not setup:
@@ -483,15 +488,17 @@ class TruexDataProvider(ExternalDataProvider):
                 self.send_queue = asyncio.Queue()
                 self.recv_task = asyncio.create_task(self._receive_messages(ws))
                 self.send_task = asyncio.create_task(self._send_messages(ws))
-                
+
                 # Wait for both tasks with proper exception handling
                 try:
                     await asyncio.gather(self.recv_task, self.send_task)
                 except asyncio.CancelledError:
                     # Expected during shutdown - suppress the exception
-                    logger.debug("WebSocket connection tasks cancelled (expected during shutdown)")
+                    logger.debug(
+                        "WebSocket connection tasks cancelled (expected during shutdown)"
+                    )
                     raise  # Re-raise to properly close the connection
-                    
+
         except asyncio.CancelledError:
             # Re-raise cancellation to close connection properly
             raise
@@ -507,34 +514,34 @@ class TruexDataProvider(ExternalDataProvider):
                 tasks_to_cancel.append(self.recv_task)
             if self.send_task and not self.send_task.done():
                 tasks_to_cancel.append(self.send_task)
-            
+
             if tasks_to_cancel:
                 # Cancel all tasks
                 for task in tasks_to_cancel:
                     task.cancel()
-                
+
                 # Wait for tasks to be cancelled with proper exception handling
                 try:
                     # Use asyncio.wait instead of gather to avoid propagating CancelledError
                     done, pending = await asyncio.wait(
-                        tasks_to_cancel, 
-                        timeout=2.0,
-                        return_when=asyncio.ALL_COMPLETED
+                        tasks_to_cancel, timeout=2.0, return_when=asyncio.ALL_COMPLETED
                     )
-                    
+
                     # Check for any remaining pending tasks
                     if pending:
-                        logger.warning(f"Some tasks did not complete: {len(pending)} pending")
+                        logger.warning(
+                            f"Some tasks did not complete: {len(pending)} pending"
+                        )
                         for task in pending:
                             task.cancel()
-                            
+
                 except Exception as e:
                     # Suppress expected cancellation exceptions
                     logger.debug(f"Expected exception during task cancellation: {e}")
-            
+
             # Stop the event loop
             self.ws_loop.stop()
-            
+
         except Exception as e:
             logger.debug(f"Error during WebSocket shutdown (expected): {e}")
 
@@ -543,14 +550,14 @@ class TruexDataProvider(ExternalDataProvider):
         self.ws_seqnum = {}
         self.ws_data = {}
         self.symbol_map = {}
-        
+
         async for message in ws:
             try:
                 msg = json.loads(message)
                 logger.debug(f"Received message: {msg}")
-                
+
                 await self._process_ws_message(msg)
-                
+
             except Exception as e:
                 logger.error(f"Error processing message: {e}")
                 continue
@@ -576,11 +583,15 @@ class TruexDataProvider(ExternalDataProvider):
         try:
             if chn == "WEBSOCKET":
                 if upd == "WELCOME":
-                    logger.info(f"Welcome message: {msg['message']} v{msg['version']} @ {msg['datetime']}")
+                    logger.info(
+                        f"Welcome message: {msg['message']} v{msg['version']} @ {msg['datetime']}"
+                    )
                 elif upd == "SNAPSHOT":
                     for subscription in msg["subscriptions"]:
                         if subscription["channel"] == "INSTRUMENT":
-                            logger.info(f"Currently subscribed: {subscription['item_names']}")
+                            logger.info(
+                                f"Currently subscribed: {subscription['item_names']}"
+                            )
 
             elif chn == "INSTRUMENT":
                 if chn not in self.ws_data:
@@ -591,10 +602,10 @@ class TruexDataProvider(ExternalDataProvider):
                     symbol = msg["data"]["info"]["symbol"]
                     self.ws_data[chn][symbol] = msg["data"]
                     self.symbol_map[msg["data"]["id"]] = symbol
-                    
+
                     if self.queue_callback:
                         self.queue_callback.put(symbol)
-                        
+
                 if upd == "UPDATE":
                     if msg["seqnum"] != self.ws_seqnum[chn]:
                         gap = msg["seqnum"] - self.ws_seqnum[chn]
@@ -624,7 +635,7 @@ class TruexDataProvider(ExternalDataProvider):
 
                     self.ws_data[chn][symbol] = msg["data"]
                     self.ws_seqnum[chn] = str(int(msg["seqnum"]) + 1)
-                    
+
                     # Update market data and notify callbacks
                     await self.get_current_data(symbol)
 
@@ -638,7 +649,7 @@ class TruexDataProvider(ExternalDataProvider):
                     logger.error(f"Unknown instrument id: {instrument_id}")
                     return
                 symbol = self.symbol_map[instrument_id]
-                
+
                 if msg["seqnum"] != self.ws_seqnum[chn]:
                     gap = int(msg["seqnum"]) - int(self.ws_seqnum[chn])
                     logger.error(f"Gap of {gap} msgs detected in {chn}")
@@ -646,13 +657,13 @@ class TruexDataProvider(ExternalDataProvider):
                 logger.info(f"Trade {symbol}: {msg}")
                 self.ws_data[chn][symbol] = msg["data"]
                 self.ws_seqnum[chn] = str(int(msg["seqnum"]) + 1)
-                
+
                 if self.queue_callback:
                     self.queue_callback.put(symbol)
 
             else:
                 raise Exception(f"Unknown channel: {chn}")
-                
+
         except Exception as e:
             logger.error(f"Error processing {chn} message: {e}")
 
@@ -664,7 +675,7 @@ class TruexDataProvider(ExternalDataProvider):
         ticker = {}
         tickers = self.ws_data["EBBO"]
         ticker_info = {}
-        
+
         if symbol not in tickers:
             if "INSTRUMENT" not in self.ws_data:
                 return False
@@ -673,24 +684,31 @@ class TruexDataProvider(ExternalDataProvider):
                 return None
             # Stub out a ticker if we don't have one
             ref_px = instrument[symbol]["info"]["reference_price"]
-            ticker["mid"] = ticker["buy"] = ticker["sell"] = ticker["last"] = float(ref_px)
+            ticker["mid"] = ticker["buy"] = ticker["sell"] = ticker["last"] = float(
+                ref_px
+            )
         else:
             ticker_info = tickers[symbol]["info"]
             if (
                 ticker_info["best_ask"]["price"] == "0"
                 or ticker_info["best_bid"]["price"] == "0"
-                or ticker_info["best_bid"]["price"] == "-170141183460469231731.687303715884105728"
-                or ticker_info["best_ask"]["price"] == "170141183460469231731.687303715884105727"
+                or ticker_info["best_bid"]["price"]
+                == "-170141183460469231731.687303715884105728"
+                or ticker_info["best_ask"]["price"]
+                == "170141183460469231731.687303715884105727"
             ):
                 instrument = self.ws_data["INSTRUMENT"]
                 ref_px = instrument[symbol]["info"]["reference_price"]
-                ticker["mid"] = ticker["buy"] = ticker["sell"] = ticker["last"] = float(ref_px)
+                ticker["mid"] = ticker["buy"] = ticker["sell"] = ticker["last"] = float(
+                    ref_px
+                )
             else:
                 ticker = {
                     "mid": (
                         float(ticker_info["best_bid"]["price"])
                         + float(ticker_info["best_ask"]["price"])
-                    ) // 2.0,
+                    )
+                    // 2.0,
                     "buy": float(ticker_info["best_bid"]["price"]),
                     "sell": float(ticker_info["best_ask"]["price"]),
                     "last": float(ticker_info["last_trade"]["price"]),
@@ -706,16 +724,18 @@ class TruexDataProvider(ExternalDataProvider):
         symbols = self.ws_data.get("INSTRUMENT", {})
         if symbol in symbols:
             return symbols[symbol]["id"]
-        
+
         # Fallback: get from REST API if WebSocket data not available
-        logger.warning(f"WebSocket instrument data not available for {symbol}, fetching via REST API")
+        logger.warning(
+            f"WebSocket instrument data not available for {symbol}, fetching via REST API"
+        )
         try:
             instrument_data = self.get_instrument(symbol)
             if instrument_data and "id" in instrument_data:
                 return instrument_data["id"]
         except Exception as e:
             logger.error(f"Error fetching instrument data for {symbol}: {e}")
-        
+
         logger.error(f"Could not get instrument ID for {symbol}")
         return None
 
@@ -729,8 +749,7 @@ class TruexDataProvider(ExternalDataProvider):
         logger.info(f"Subscribing to instrument {symbol}")
         if self.send_queue and self.ws_loop:
             asyncio.run_coroutine_threadsafe(
-                self.send_queue.put(json.dumps(self.ws_auth(request))), 
-                self.ws_loop
+                self.send_queue.put(json.dumps(self.ws_auth(request))), self.ws_loop
             )
 
     def _ws_unsubscribe_from_instrument(self, symbol: str):
@@ -742,8 +761,7 @@ class TruexDataProvider(ExternalDataProvider):
         }
         if self.send_queue and self.ws_loop:
             asyncio.run_coroutine_threadsafe(
-                self.send_queue.put(json.dumps(self.ws_auth(request))), 
-                self.ws_loop
+                self.send_queue.put(json.dumps(self.ws_auth(request))), self.ws_loop
             )
 
     def _ws_subscribe_to_ticker(self, symbol: str):
@@ -756,8 +774,7 @@ class TruexDataProvider(ExternalDataProvider):
         logger.info(f"Subscribing to ticker {symbol}")
         if self.send_queue and self.ws_loop:
             asyncio.run_coroutine_threadsafe(
-                self.send_queue.put(json.dumps(self.ws_auth(request))), 
-                self.ws_loop
+                self.send_queue.put(json.dumps(self.ws_auth(request))), self.ws_loop
             )
 
     def _ws_unsubscribe_from_ticker(self, symbol: str):
@@ -769,8 +786,7 @@ class TruexDataProvider(ExternalDataProvider):
         }
         if self.send_queue and self.ws_loop:
             asyncio.run_coroutine_threadsafe(
-                self.send_queue.put(json.dumps(self.ws_auth(request))), 
-                self.ws_loop
+                self.send_queue.put(json.dumps(self.ws_auth(request))), self.ws_loop
             )
 
 
@@ -801,10 +817,10 @@ class TrueX:
         self.apiClient = 0
         self.orderNode = orderNode
         self.timeout = timeout
-        
+
         # Initialize the unified provider
         self.provider = TruexDataProvider(queue_callback=queue)
-        
+
         # Connect synchronously (for backward compatibility)
         try:
             # Run connection in asyncio loop
@@ -812,10 +828,10 @@ class TrueX:
             asyncio.set_event_loop(loop)
             connected = loop.run_until_complete(self.provider.connect())
             loop.close()
-            
+
             if not connected:
                 raise Exception("Failed to connect to TrueX")
-                
+
         except Exception as e:
             logger.error(f"Error initializing TrueX: {e}")
             raise

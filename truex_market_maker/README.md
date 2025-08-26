@@ -591,7 +591,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 For support and questions:
 - Check the troubleshooting section above
-- Review configuration examples in `example_external_config.py`
 - Enable debug logging for detailed diagnostics
 
 ---
