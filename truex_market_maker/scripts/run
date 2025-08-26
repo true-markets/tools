@@ -51,38 +51,28 @@ Mode Detection:
 
 Examples:
   ./scripts/run BTC-PYUSD                    # Auto-detect from settings
-  ./scripts/run --enhanced BTC-PYUSD         # Force enhanced mode  
-  ./scripts/run --basic BTC-PYUSD            # Force basic mode
-  ./scripts/run BTC-PYUSD ETH-PYUSD          # Multiple symbols
         '''
     )
     
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
-        '--basic', 
+        '--disable-external-data', 
         action='store_true',
-        help='Force basic mode (disable enhanced features)'
+        help='Disable external market data'
     )
     mode_group.add_argument(
-        '--enhanced', 
+        '--disable-pricing-models', 
         action='store_true',
-        help='Force enhanced mode (enable external data and pricing models)'
+        help='Disable pricing models'
     )
     
     parser.add_argument(
-        'symbols',
+        '--symbols',
         nargs='*',
         help='Trading symbols (if not specified, uses settings.SYMBOLS)'
     )
     
     args = parser.parse_args()
-    
-    # Determine enhanced mode
-    enhanced = None  # Auto-detect from settings
-    if args.basic:
-        enhanced = False
-    elif args.enhanced:
-        enhanced = True
     
     # Update symbols in settings if provided
     if args.symbols:
@@ -98,8 +88,7 @@ Examples:
     from market_maker import market_maker
 
     # Run the market maker
-    market_maker.run(enhanced=enhanced)
-
+    market_maker.run_enhanced(args)
 
 if __name__ == "__main__":
     main()

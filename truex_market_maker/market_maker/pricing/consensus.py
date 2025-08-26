@@ -5,7 +5,7 @@ import time
 from typing import Dict, List, Optional
 
 from market_maker.external_data.base import ExternalDataManager
-from market_maker.pricing.base import PricingModel, PricingResult
+from market_maker.pricing.base import OrderPricingResult, PricingModel, PricingResult
 from market_maker.utils import log
 
 logger = log.setup_custom_logger("consensus_model")
@@ -24,6 +24,9 @@ class ConsensusModel(PricingModel):
         self.min_providers = min_providers
         self.outlier_threshold = outlier_threshold  # 2% outlier threshold
         self.base_spread_bps = base_spread_bps
+
+    def get_required_providers(self) -> List[str]:
+        return []  # Can work with any providers
 
     def calculate_price(
         self, symbol: str, external_data: ExternalDataManager, local_ticker: Dict
@@ -84,8 +87,16 @@ class ConsensusModel(PricingModel):
             },
         )
 
-    def get_required_providers(self) -> List[str]:
-        return []  # Can work with any providers
+    def calculate_order_prices(
+        self, symbol: str, external_data: ExternalDataManager, local_ticker: Dict
+    ) -> Optional[OrderPricingResult]:
+        result = self.calculate_price(symbol, external_data, local_ticker)
+        if result:
+            return self.get_order_prices(
+                symbol, result.bid_price, result.ask_price, result.confidence
+            )
+
+        return None
 
     def _remove_outliers(self, values: List[float]) -> List[float]:
         """Remove outliers from a list of values."""

@@ -25,7 +25,7 @@ def setup_custom_logger(name, log_level=settings.LOG_LEVEL):
     # Only add handler if logger doesn't already have handlers
     if not logger.handlers:
         formatter = logging.Formatter(
-            fmt="%(asctime)s - %(levelname)6s - %(threadName)s/%(module)s:%(lineno)d - %(message)s"
+            fmt="%(asctime)s - %(levelname)6s - %(threadName)10s/%(module)-12s:%(lineno)4d - %(message)s"
         )
         handler = logging.StreamHandler()
         handler.setFormatter(formatter)

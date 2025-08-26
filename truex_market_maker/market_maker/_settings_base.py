@@ -66,7 +66,7 @@ MAINTAIN_SPREADS = True
 # it will be resubmitted.
 #
 # 0.01 == 1%
-RELIST_INTERVAL = 0.01
+RELIST_INTERVAL = 0.00001
 
 ########################################################################################################################
 # Trading Behavior
@@ -262,6 +262,7 @@ ORDER_ADJUSTMENT_INTERVAL = 3  # More frequent checks for better reactivity
 
 # Price movement threshold for order adjustments
 PRICE_MOVE_THRESHOLD = 0.00002  # more reactive to smaller price moves
+PRICE_MOVE_TOLERANCE = 0.0001  # more reactive to smaller price moves
 
 # Maximum age for orders before considering cancellation (seconds)
 MAX_ORDER_AGE_SECONDS = 300  # 5 minutes

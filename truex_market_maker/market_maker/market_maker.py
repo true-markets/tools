@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 
 # our modules
-from market_maker import truex
+from market_maker.local_data import truex
 from market_maker.settings import settings
 from market_maker.utils import constants, log, math
 from market_maker.utils.tick import GetQuoteTick
@@ -36,7 +36,7 @@ except ImportError:
 
 # Order adjustment system (always available)
 try:
-    from market_maker.order_adjustment import OrderAdjustmentEngine
+    from market_maker.order_adjustment import OrderAdjustmentTracker
 
     ORDER_ADJUSTMENT_AVAILABLE = True
 except ImportError:
@@ -222,6 +222,7 @@ class OrderManager:
             logger.info("LIVE RUN -- Orders will be posted to the markets")
 
         self.markets = {}
+        self.pricing = {}
         self.start_position_buy = {}
         self.start_position_sell = {}
         for symbol in settings.SYMBOLS:
@@ -240,6 +241,7 @@ class OrderManager:
         self.sanity_check_failures = 0
         self.max_sanity_failures = getattr(settings, "MAX_SANITY_FAILURES", 3)
 
+        self.order_adjustment_tracker = None
         # Order adjustment system initialization (before enhanced features for logging)
         self._init_order_adjustment()
 
@@ -294,6 +296,7 @@ class OrderManager:
 
         # Initialize pricing models if enabled
         if use_pricing_models and self.external_data_manager:
+            logger.info("📊 setting up pricing manager")
             self.pricing_manager = self._setup_pricing_models()
 
         if self.external_data_manager or self.pricing_manager:
@@ -416,22 +419,12 @@ class OrderManager:
 
     def _init_order_adjustment(self):
         """Initialize the order adjustment system."""
-        self.order_adjustment_engine = None
-
-        if not ORDER_ADJUSTMENT_AVAILABLE:
-            logger.warning(
-                "⚠️ Order adjustment system not available - PRICE_MOVE_THRESHOLD will not be active"
-            )
-            return
-
         try:
-            self.order_adjustment_engine = OrderAdjustmentEngine(settings)
+            self.order_adjustment_tracker = OrderAdjustmentTracker(settings)
 
             threshold = getattr(settings, "PRICE_MOVE_THRESHOLD", 0.002)
             cooldown = getattr(settings, "ORDER_ADJUSTMENT_COOLDOWN", 30)
-            logger.info(
-                f"🎯 Order adjustment system initialized (integrated with converge_orders):"
-            )
+            logger.info(f"🎯 Order adjustment system initialized")
             logger.info(
                 f"   📊 Price move threshold: {threshold:.5f} ({threshold*100:.3f}%)"
             )
@@ -441,8 +434,10 @@ class OrderManager:
             )
 
         except Exception as e:
-            logger.error(f"Failed to initialize order adjustment system: {e}")
-            self.order_adjustment_engine = None
+            self.order_adjustment_tracker = None
+            logger.warning(
+                "⚠️ Order adjustment system not available - PRICE_MOVE_THRESHOLD will not be active"
+            )
 
     def restart(self):
         pass
@@ -699,109 +694,16 @@ class OrderManager:
 
         Enhanced version: Uses pricing models when available, falls back to original logic.
         """
-        # Try enhanced pricing first if available
-        enhanced_price = self._get_enhanced_price_offset(symbol, index)
-        if enhanced_price is not None:
-            return enhanced_price
+        if not symbol in self.pricing or self.pricing[symbol] == None:
+            return self._get_price_offset(symbol, index)
+        prices = self.pricing[symbol]
 
-        # Fall back to original pricing logic
-        # Maintain existing spreads for max profit
-        if settings.MAINTAIN_SPREADS:
-            start_position = (
-                self.start_position_buy[symbol]
-                if index < 0
-                else self.start_position_sell[symbol]
-            )
-            # First positions (index 1, -1) should start right at start_position, others should branch from there
-            index = index + 1 if index < 0 else index - 1
-        else:
-            # Offset mode: ticker comes from a reference market and we define an offset.
-            start_position = (
-                self.start_position_buy[symbol]
-                if index < 0
-                else self.start_position_sell[symbol]
-            )
+        if index < 0:
+            return prices.buy_levels[index * -1].price
+        return prices.sell_levels[index].price
 
-            # If we're attempting to sell, but our sell price is actually lower than the buy,
-            # move over to the sell side.
-            if index > 0 and start_position < self.start_position_buy[symbol]:
-                start_position = self.start_position_sell[symbol]
-            # Same for buys.
-            if index < 0 and start_position > self.start_position_sell[symbol]:
-                start_position = self.start_position_buy[symbol]
-
-        # todo this needs to based of price
-        price = start_position * (1 + settings.INTERVAL) ** index
-        tickSize = GetQuoteTick(price)
-        return math.toNearest(price, tickSize)
-
-    def _get_enhanced_price_offset(self, symbol, index):
-        """Get enhanced price offset using pricing models if available.
-
-        Returns None if enhanced pricing is not available or not valid.
-        """
-        if not self.pricing_manager:
-            return None
-
-        # Clear cache occasionally to prevent memory buildup
-        current_time = time.time()
-        if current_time - self._last_cache_clear > 60:  # Clear every minute
-            self._pricing_cache.clear()
-            self._last_cache_clear = time.time()
-
-        # Create cache key for this request
-        cache_key = f"{symbol}_{int(time.time())}"
-
-        # Try to get price from pricing models first
-        try:
-            local_ticker = self.markets[symbol].get_ticker()
-
-            # Check cache first
-            if cache_key in self._pricing_cache:
-                pricing_result, validation_result = self._pricing_cache[cache_key]
-            else:
-                pricing_result = self.pricing_manager.get_best_price(
-                    symbol, local_ticker
-                )
-                validation_result = pricing_result and self._is_pricing_valid(
-                    symbol, pricing_result, local_ticker
-                )
-                self._pricing_cache[cache_key] = (pricing_result, validation_result)
-
-            if pricing_result and validation_result:
-                enhanced_price = self._calculate_offset_from_pricing(
-                    pricing_result, index
-                )
-                original_price = self._get_original_price_offset(symbol, index)
-
-                # Only log occasionally to reduce noise
-                if (
-                    index == -1 and int(time.time()) % 10 == 0
-                ):  # Every 10 seconds, only for first buy order
-                    price_diff = (
-                        abs(enhanced_price - original_price) / original_price * 100
-                    )
-                    logger.info(
-                        f"💰 Enhanced pricing: {symbol} ${enhanced_price:.2f} vs local ${original_price:.2f} (diff: {price_diff:.1f}%)"
-                    )
-
-                return enhanced_price
-            else:
-                if (
-                    pricing_result and index == -1 and int(time.time()) % 30 == 0
-                ):  # Every 30 seconds for debugging
-                    logger.debug(
-                        f"⚠️ Enhanced pricing for {symbol} not valid - confidence: {pricing_result.confidence:.2f}"
-                    )
-
-        except Exception as e:
-            logger.error(f"Error getting enhanced pricing for {symbol}: {e}")
-
-        return None
-
-    def _get_original_price_offset(self, symbol, index):
-        """Get the original price offset calculation (without enhanced pricing)."""
-        # This is the original logic from get_price_offset
+    def _get_price_offset(self, symbol, index):
+        """Get the price offset calculation (without enhanced pricing)."""
         if settings.MAINTAIN_SPREADS:
             start_position = (
                 self.start_position_buy[symbol]
@@ -1140,7 +1042,7 @@ class OrderManager:
         )
 
         # Order adjustment system status
-        if self.order_adjustment_engine:
+        if self.order_adjustment_tracker:
             threshold = getattr(settings, "PRICE_MOVE_THRESHOLD", 0.002)
             cooldown = getattr(settings, "ORDER_ADJUSTMENT_COOLDOWN", 30)
             logger.info(f"🎯 Order Adjustments: ✅ Enabled")
@@ -1263,11 +1165,11 @@ class OrderManager:
                 logger.warning("❌ Pricing manager not available")
 
             # Print order adjustment status
-            if self.order_adjustment_engine:
+            if self.order_adjustment_tracker:
                 try:
                     # Check if we're in cooldown
-                    in_cooldown = self.order_adjustment_engine._is_in_cooldown(symbol)
-                    last_adjustment = self.order_adjustment_engine.last_adjustment.get(
+                    in_cooldown = self.order_adjustment_tracker._is_in_cooldown(symbol)
+                    last_adjustment = self.order_adjustment_tracker.last_adjustment.get(
                         symbol, 0
                     )
 
@@ -1284,8 +1186,6 @@ class OrderManager:
 
                 except Exception as e:
                     logger.debug(f"Error getting order adjustment status: {e}")
-
-            logger.info("")
 
     def _attempt_external_bootstrap(self, symbol: str, local_ticker: dict) -> bool:
         """Attempt to bootstrap pricing from external market data when local market is inconsistent.
@@ -1506,171 +1406,43 @@ class OrderManager:
             logger.error(f"Error getting external ticker for {symbol}: {e}")
             return None
 
+    def _get_order_pricing_results_for_symbol(self, symbol: str):
+        """Get order pricing results for all levels for the given symbol."""
+        if self.pricing_manager:
+            local_ticker = self.markets[symbol].get_ticker()
+            return self.pricing_manager.get_symbol_pricing(symbol, local_ticker)
+
+        return None
+
     def _get_pricing_result_for_symbol(self, symbol: str):
         """Get pricing result once per symbol to avoid repeated calls."""
-        try:
-            # Try to get pricing from pricing models first
-            if self.pricing_manager:
-                try:
-                    local_ticker = self.markets[symbol].get_ticker()
-                    pricing_result = self.pricing_manager.get_best_price(
-                        symbol, local_ticker
-                    )
-                    if pricing_result:
-                        return pricing_result
-                except Exception as e:
-                    logger.debug(
-                        f"Error getting pricing model result for {symbol}: {e}"
-                    )
-
-            # If no pricing model result, create one from current market data
-            try:
-                local_ticker = self.markets[symbol].get_ticker()
-                # Create a basic pricing result from current start positions
-                from market_maker.pricing.base import PricingResult
-
-                pricing_result = PricingResult(
-                    symbol=symbol,
-                    fair_value=self.start_position_mid,
-                    bid_price=self.start_position_buy[symbol],
-                    ask_price=self.start_position_sell[symbol],
-                    confidence=0.8,  # Medium confidence for local pricing
-                    spread_bps=(
-                        (
-                            self.start_position_sell[symbol]
-                            - self.start_position_buy[symbol]
-                        )
-                        / self.start_position_mid
-                    )
-                    * 10000,
-                    timestamp=time.time(),
-                    model_name="local_market",
-                )
+        # Try to get pricing from pricing models first
+        if self.pricing_manager:
+            local_ticker = self.markets[symbol].get_ticker()
+            pricing_result = self.pricing_manager.get_best_price(symbol, local_ticker)
+            if pricing_result:
                 return pricing_result
-            except Exception as e:
-                logger.debug(f"Error creating basic pricing result for {symbol}: {e}")
-                return None
 
-        except Exception as e:
-            logger.error(f"Error getting pricing result for {symbol}: {e}")
-            return None
+        # If no pricing model result, create one from current market data
+        local_ticker = self.markets[symbol].get_ticker()
+        # Create a basic pricing result from current start positions
+        from market_maker.pricing.base import PricingResult
 
-    # Note: Order adjustments are now integrated directly into converge_orders()
-    # The old _check_order_adjustments method has been removed to prevent conflicts
-
-    def _check_single_order_adjustment(
-        self, symbol: str, order: dict, pricing_result
-    ) -> tuple:
-        """Check if a single order needs adjustment based on pricing models.
-
-        Args:
-            symbol: Trading symbol
-            order: Order to check
-            pricing_result: Pre-computed pricing result for this symbol
-
-        Returns:
-            tuple: (adjustment_needed: bool, adjusted_price: float or None)
-        """
-        if not self.order_adjustment_engine or not pricing_result:
-            return False, None
-
-        try:
-            # Check if we're in cooldown for this symbol
-            if self.order_adjustment_engine._is_in_cooldown(symbol):
-                return False, None
-
-            # Check this specific order for adjustments
-            order_price = float(order["order_info"]["price"])
-            side = order["order_info"]["side"]
-            order_id = order["id"]
-
-            # Calculate the intended ladder position and target price based on current price
-            # No sorting needed - determine position from price difference
-            spread_increment = (
-                pricing_result.spread_bps / 10000 * pricing_result.fair_value * 0.1
+        pricing_result = PricingResult(
+            symbol=symbol,
+            fair_value=self.start_position_mid,
+            bid_price=self.start_position_buy[symbol],
+            ask_price=self.start_position_sell[symbol],
+            confidence=0.8,  # Medium confidence for local pricing
+            spread_bps=(
+                (self.start_position_sell[symbol] - self.start_position_buy[symbol])
+                / self.start_position_mid
             )
-
-            if side == "BUY":
-                base_price = pricing_result.bid_price
-
-                # Determine intended position based on how far current order is from the top bid
-                if spread_increment > 0:
-                    # Calculate what position this order should be at based on its current price
-                    price_diff = base_price - order_price
-                    intended_position = max(0, round(price_diff / spread_increment))
-                else:
-                    intended_position = 0
-
-                # Calculate target price for this intended position
-                target_price = base_price - (intended_position * spread_increment)
-                logger.debug(
-                    f"💡 Buy order {order_id}: current=${order_price:.4f}, base=${base_price:.4f}, position={intended_position}, target=${target_price:.4f}"
-                )
-
-            else:  # SELL
-                base_price = pricing_result.ask_price
-
-                # Determine intended position based on how far current order is from the top ask
-                if spread_increment > 0:
-                    # Calculate what position this order should be at based on its current price
-                    price_diff = order_price - base_price
-                    intended_position = max(0, round(price_diff / spread_increment))
-                else:
-                    intended_position = 0
-
-                # Calculate target price for this intended position
-                target_price = base_price + (intended_position * spread_increment)
-                logger.debug(
-                    f"💡 Sell order {order_id}: current=${order_price:.4f}, base=${base_price:.4f}, position={intended_position}, target=${target_price:.4f}"
-                )
-
-            # Check if adjustment is needed with stability measures
-            if target_price > 0:
-                price_diff_pct = abs(order_price - target_price) / target_price
-                tolerance = 0.02  # 2% tolerance
-
-                # Add stability - check if we recently adjusted this order to prevent oscillation
-                recent_adjustment_key = f"{order_id}_last_target"
-                last_target = getattr(self, f"_{recent_adjustment_key}", None)
-
-                # If we're about to adjust back to a recent price, increase tolerance
-                if (
-                    last_target
-                    and abs(target_price - last_target) / target_price < 0.01
-                ):  # Within 1%
-                    tolerance = (
-                        tolerance * 2
-                    )  # Double tolerance to prevent flip-flopping
-                    logger.debug(
-                        f"🔄 Increased tolerance for {order_id} to prevent oscillation"
-                    )
-
-                if price_diff_pct > max(
-                    tolerance, self.order_adjustment_engine.price_move_threshold
-                ):
-                    # Round to tick size
-                    adjusted_price = self.order_adjustment_engine._round_to_tick(
-                        target_price
-                    )
-
-                    # Store this target price for oscillation prevention
-                    setattr(
-                        self, f"_{recent_adjustment_key}", order_price
-                    )  # Remember current price
-
-                    logger.debug(
-                        f"🎯 Order {order_id} adjustment needed: {order_price:.4f} → {adjusted_price:.4f} (position #{intended_position+1}, Δ{price_diff_pct:.3f}%)"
-                    )
-
-                    # Don't record adjustment here - will be done at end of batch processing
-
-                    return True, adjusted_price
-
-            return False, None
-
-        except Exception as e:
-            logger.error(f"Error checking single order adjustment for {symbol}: {e}")
-            return False, None
+            * 10000,
+            timestamp=time.time(),
+            model_name="local_market",
+        )
+        return pricing_result
 
     def _process_order_amendment(
         self,
@@ -1682,52 +1454,41 @@ class OrderManager:
         to_amend: list,
     ):
         """Helper method to process potential order amendments with stability checks."""
-        try:
-            # Add hysteresis to prevent oscillation - only amend if change is significant
-            current_price = float(order["order_info"]["price"])
-            price_change_pct = abs(
-                (float(target_price) - current_price) / current_price
+        # Add hysteresis to prevent oscillation - only amend if change is significant
+        current_price = float(order["order_info"]["price"])
+        price_change_pct = abs((float(target_price) - current_price) / current_price)
+
+        # Use larger threshold for amendments to prevent oscillation
+        min_change_threshold = max(settings.RELIST_INTERVAL, 0.005)  # At least 0.5%
+
+        price_change_needed = (
+            target_price != current_price and price_change_pct > min_change_threshold
+        )
+
+        qty_change_needed = target_qty != order["leaves_qty"]
+
+        if qty_change_needed or price_change_needed:
+            amendment_reason = []
+            if adjustment_needed and price_change_needed:
+                amendment_reason.append("pricing adjustment")
+                # Track that we made a pricing adjustment (don't activate cooldown yet)
+                self._adjustments_made_this_cycle.add(symbol)
+            if qty_change_needed:
+                amendment_reason.append("qty change")
+            if price_change_needed and not adjustment_needed:
+                amendment_reason.append("price convergence")
+
+            logger.debug(
+                f"📝 Amending order {order['id']}: {', '.join(amendment_reason)} (Δ{price_change_pct:.3f}%)"
             )
 
-            # Use larger threshold for amendments to prevent oscillation
-            min_change_threshold = max(settings.RELIST_INTERVAL, 0.005)  # At least 0.5%
-
-            price_change_needed = (
-                target_price != current_price
-                and price_change_pct > min_change_threshold
-            )
-
-            qty_change_needed = target_qty != order["leaves_qty"]
-
-            if qty_change_needed or price_change_needed:
-                amendment_reason = []
-                if adjustment_needed and price_change_needed:
-                    amendment_reason.append("pricing adjustment")
-                    # Track that we made a pricing adjustment (don't activate cooldown yet)
-                    self._adjustments_made_this_cycle.add(symbol)
-                if qty_change_needed:
-                    amendment_reason.append("qty change")
-                if price_change_needed and not adjustment_needed:
-                    amendment_reason.append("price convergence")
-
-                logger.debug(
-                    f"📝 Amending order {order['id']}: {', '.join(amendment_reason)} (Δ{price_change_pct:.3f}%)"
-                )
-
-                to_amend.append(
-                    {
-                        "ref_order_id": order["id"],
-                        "new_qty": str(
-                            float(order["executed_qty"]) + float(target_qty)
-                        ),
-                        "new_price": str(target_price),
-                        "side": order["order_info"]["side"],
-                    }
-                )
-
-        except Exception as e:
-            logger.error(
-                f"Error processing amendment for order {order.get('id', 'unknown')}: {e}"
+            to_amend.append(
+                {
+                    "ref_order_id": order["id"],
+                    "new_qty": str(float(order["executed_qty"]) + float(target_qty)),
+                    "new_price": str(target_price),
+                    "side": order["order_info"]["side"],
+                }
             )
 
     def _check_for_reactive_adjustments(self) -> bool:
@@ -1735,111 +1496,111 @@ class OrderManager:
 
         Returns True if any adjustments were triggered.
         """
-        if not self.order_adjustment_engine:
+        if not self.order_adjustment_tracker:
             return False
 
-        try:
-            current_time = time.time()
+        current_time = time.time()
 
-            # Don't check too frequently to avoid overload
-            min_check_interval = getattr(settings, "ORDER_ADJUSTMENT_INTERVAL", 3)
-            if current_time - self._last_price_check < min_check_interval:
-                return False
+        # Don't check too frequently to avoid overload
+        if (
+            current_time - self._last_price_check
+            < self.order_adjustment_tracker.adjustment_interval
+        ):
+            return False
 
-            self._last_price_check = current_time
-            adjustments_triggered = False
+        self._last_price_check = current_time
+        adjustments_triggered = False
 
-            for symbol in settings.SYMBOLS:
-                # Skip if in cooldown for this symbol
-                if self.order_adjustment_engine._is_in_cooldown(symbol):
-                    continue
+        for symbol in settings.SYMBOLS:
+            # Skip if in cooldown for this symbol
+            if self.order_adjustment_tracker._is_in_cooldown(symbol):
+                continue
 
-                # Get current pricing
-                current_pricing = self._get_pricing_result_for_symbol(symbol)
-                if not current_pricing:
-                    continue
+            # Get current pricing
+            current_pricing = self._get_pricing_result_for_symbol(symbol)
+            if not current_pricing:
+                continue
 
-                # Compare with last pricing snapshot
-                last_pricing = self._last_pricing_snapshot.get(symbol)
-                if last_pricing:
-                    # Check if there's been significant price movement
-                    price_move_detected = self._detect_significant_price_movement(
-                        symbol, last_pricing, current_pricing
-                    )
-
-                    if price_move_detected:
-                        logger.info(
-                            f"🚨 Significant price movement detected for {symbol} - triggering reactive adjustments"
-                        )
-
-                        # Trigger order adjustments by calling place_orders for this symbol
-                        self.place_orders([symbol])
-                        adjustments_triggered = True
-                else:
-                    # First time seeing this symbol - just initialize the snapshot
-                    logger.debug(f"📊 Initializing price monitoring for {symbol}")
-
-                # Update the pricing snapshot
+            # Compare with last pricing snapshot
+            last_pricing = self._last_pricing_snapshot.get(symbol)
+            if not last_pricing:
                 self._last_pricing_snapshot[symbol] = current_pricing
+                continue
 
-            return adjustments_triggered
+            # Check if there's been significant price movement
+            price_move_detected = self._detect_significant_price_movement(
+                symbol, last_pricing, current_pricing
+            )
 
-        except Exception as e:
-            logger.error(f"Error in reactive adjustment check: {e}")
-            return False
+            if price_move_detected:
+                logger.info(
+                    f"Significant price movement detected for {symbol} - triggering reactive adjustments"
+                )
+
+                # Trigger order adjustments by calling place_orders for this symbol
+                self.place_orders([symbol])
+                adjustments_triggered = True
+                if self.order_adjustment_tracker:
+                    self.order_adjustment_tracker.record_adjustment(symbol)
+
+            # Update the pricing snapshot
+            self._last_pricing_snapshot[symbol] = current_pricing
+
+        return adjustments_triggered
 
     def _detect_significant_price_movement(
         self, symbol: str, old_pricing, new_pricing
     ) -> bool:
         """Detect if price movement exceeds threshold."""
-        try:
-            threshold = self.order_adjustment_engine.price_move_threshold
+        threshold = self.order_adjustment_tracker.price_move_threshold
 
-            # Check bid price movement
-            if old_pricing.bid_price > 0 and new_pricing.bid_price > 0:
-                bid_change_pct = (
-                    abs(new_pricing.bid_price - old_pricing.bid_price)
-                    / old_pricing.bid_price
+        # Check bid price movement
+        if old_pricing.bid_price > 0 and new_pricing.bid_price > 0:
+            bid_change_pct = (
+                abs(new_pricing.bid_price - old_pricing.bid_price)
+                / old_pricing.bid_price
+            )
+            if bid_change_pct > threshold:
+                logger.info(
+                    f"📊 {symbol} bid moved {bid_change_pct:.6f}% (threshold: {threshold:.6f}%)"
                 )
-                if bid_change_pct > threshold:
-                    logger.debug(
-                        f"📊 {symbol} bid moved {bid_change_pct:.3f}% (threshold: {threshold:.3f}%)"
-                    )
-                    return True
+                return True
 
-            # Check ask price movement
-            if old_pricing.ask_price > 0 and new_pricing.ask_price > 0:
-                ask_change_pct = (
-                    abs(new_pricing.ask_price - old_pricing.ask_price)
-                    / old_pricing.ask_price
+        # Check ask price movement
+        if old_pricing.ask_price > 0 and new_pricing.ask_price > 0:
+            ask_change_pct = (
+                abs(new_pricing.ask_price - old_pricing.ask_price)
+                / old_pricing.ask_price
+            )
+            if ask_change_pct > threshold:
+                logger.info(
+                    f"📊 {symbol} ask moved {ask_change_pct:.6f}% (threshold: {threshold:.6f}%)"
                 )
-                if ask_change_pct > threshold:
-                    logger.debug(
-                        f"📊 {symbol} ask moved {ask_change_pct:.3f}% (threshold: {threshold:.3f}%)"
-                    )
-                    return True
+                return True
 
-            # Check fair value movement
-            if old_pricing.fair_value > 0 and new_pricing.fair_value > 0:
-                fair_change_pct = (
-                    abs(new_pricing.fair_value - old_pricing.fair_value)
-                    / old_pricing.fair_value
+        # Check fair value movement
+        if old_pricing.fair_value > 0 and new_pricing.fair_value > 0:
+            fair_change_pct = (
+                abs(new_pricing.fair_value - old_pricing.fair_value)
+                / old_pricing.fair_value
+            )
+            if fair_change_pct > threshold:
+                logger.info(
+                    f"📊 {symbol} fair value moved {fair_change_pct:.6f}% (threshold: {threshold:.6f}%)"
                 )
-                if fair_change_pct > threshold:
-                    logger.debug(
-                        f"📊 {symbol} fair value moved {fair_change_pct:.3f}% (threshold: {threshold:.3f}%)"
-                    )
-                    return True
+                return True
 
-            return False
-
-        except Exception as e:
-            logger.error(f"Error detecting price movement for {symbol}: {e}")
-            return False
+        return False
 
     ###
     # Orders
     ###
+
+    def update_pricing(self, symbols=settings.SYMBOLS):
+        for symbol in symbols:
+            logger.info(f"Updating pricing for symbol: {symbol}")
+            self.pricing[symbol] = self._get_order_pricing_results_for_symbol(symbol)
+
     def prepare_order(self, symbol, index):
         """Create an order object."""
 
@@ -1871,9 +1632,9 @@ class OrderManager:
         """Create order items for use in convergence."""
 
         for symbol in symbols:
-            # logger.info("Placing orders for %s" % symbol)
             buy_orders = []
             sell_orders = []
+
             # Create orders from the outside in. This is intentional - let's say the inner order gets taken;
             # then we match orders from the outside in, ensuring the fewest number of orders are amended and only
             # a new order is created in the inside. If we did it inside-out, all orders would be amended
@@ -1883,12 +1644,19 @@ class OrderManager:
                     buy_orders.append(self.prepare_order(symbol, -i))
                 if not self.short_position_limit_exceeded(symbol):
                     sell_orders.append(self.prepare_order(symbol, i))
-
             self.converge_orders(symbol, buy_orders, sell_orders)
 
             # Don't run order adjustments immediately after converge_orders to avoid conflicts
             # Order adjustments will run on subsequent loops when prices actually move
             # This prevents the adjustment system from fighting with converge_orders
+
+    def relist_order(self, desired_order, current_order) -> bool:
+        price_ratio = float(desired_order["price"]) / float(
+            current_order["order_info"]["price"]
+        )
+        return (desired_order["price"] != current_order["order_info"]["price"]) and (
+            abs(price_ratio - 1) > settings.RELIST_INTERVAL
+        )
 
     def converge_orders(self, symbol, buy_orders, sell_orders):
         """Converge the orders we currently have in the book with what we want to be in the book.
@@ -1902,13 +1670,10 @@ class OrderManager:
         sells_matched = 0
         existing_orders = self.markets[symbol].get_orders()
 
-        # Get pricing result once per symbol to avoid repeated calls
-        pricing_result = self._get_pricing_result_for_symbol(symbol)
-
         # Check all existing orders and match them up with what we want to place.
         # If there's an open one, we might be able to amend it to fit what we want.
         # Also check if adjustments are needed based on pricing models.
-        for order in existing_orders:
+        for i, order in enumerate(existing_orders):
             try:
                 if order["order_info"]["side"] == "BUY":
                     desired_order = buy_orders[buys_matched]
@@ -1917,21 +1682,22 @@ class OrderManager:
                     desired_order = sell_orders[sells_matched]
                     sells_matched += 1
 
-                # Check if this order needs adjustment based on pricing models or price movements
-                adjustment_needed, adjusted_price = self._check_single_order_adjustment(
-                    symbol, order, pricing_result
-                )
-
-                # Determine the target price (either desired or adjusted)
-                target_price = (
-                    adjusted_price if adjustment_needed else desired_order["price"]
-                )
-                target_qty = desired_order["qty"]
-
-                # Process the amendment
-                self._process_order_amendment(
-                    symbol, order, target_price, target_qty, adjustment_needed, to_amend
-                )
+                # Found an existing order. Do we need to amend it?
+                # If price has changed, and the change is more than our RELIST_INTERVAL, amend.
+                if desired_order["qty"] != order["leaves_qty"] or self.relist_order(
+                    desired_order, order
+                ):
+                    to_amend.append(
+                        {
+                            "ref_order_id": order["id"],
+                            "new_qty": str(
+                                float(order["executed_qty"])
+                                + float(desired_order["qty"])
+                            ),
+                            "new_price": desired_order["price"],
+                            "side": order["order_info"]["side"],
+                        }
+                    )
 
             except IndexError:
                 # Will throw if there isn't a desired order to match. In that case, cancel it.
@@ -1953,9 +1719,9 @@ class OrderManager:
         if len(to_amend) > 0:
             for amended_order in reversed(to_amend):
                 reference_order = [
-                    o
-                    for o in existing_orders
-                    if o["id"] == amended_order["ref_order_id"]
+                    order
+                    for order in existing_orders
+                    if order["id"] == amended_order["ref_order_id"]
                 ][0]
                 logger.info(
                     "Amending %4s: %s @ %s to %f @ %s (%+f)"
@@ -1975,14 +1741,16 @@ class OrderManager:
                 amended_order["client_id"] = self.markets[symbol].get_client()
 
             # This can fail if an order has closed in the time we were processing.
-            # The API will send us `invalid ordStatus`, which means that the order's status (Filled/Canceled)
-            # made it not amendable.
+            # The API will send us `invalid ordStatus`, which means that the order's 
+            # status (Filled/Canceled) made it not amendable.
             # If that happens, we need to catch it and re-tick.
             try:
                 amend_result = self.markets[symbol].amend_orders(to_amend)
                 # Call extension point for each amended order
                 for amended_order in to_amend:
                     self.on_order_amended(symbol, amend_result, amended_order)
+                if self.order_adjustment_tracker:
+                    self.order_adjustment_tracker.record_adjustment(symbol)
             except Exception as e:
                 logger.error("Amend failed: %s" % e)
 
@@ -2014,8 +1782,11 @@ class OrderManager:
                 self.on_order_cancelled(symbol, cancel_result, order["id"])
 
         # Activate adjustment cooldown if we made pricing adjustments this cycle
-        if symbol in self._adjustments_made_this_cycle and self.order_adjustment_engine:
-            self.order_adjustment_engine.record_adjustment(symbol)
+        if (
+            symbol in self._adjustments_made_this_cycle
+            and self.order_adjustment_tracker
+        ):
+            self.order_adjustment_tracker.record_adjustment(symbol)
             logger.debug(
                 f"🎯 Activated adjustment cooldown for {symbol} after batch processing"
             )
@@ -2195,19 +1966,20 @@ class OrderManager:
                 # Check for symbol-specific updates
                 try:
                     symbol = self.queue.get(True, settings.LOOP_INTERVAL)
+                    self.update_pricing([symbol])
                     self.check_sanity()
                     self.place_orders([symbol])
 
                 except queue.Empty:
                     # Regular interval processing when no symbol-specific updates
+                    self.update_pricing()
                     self.check_sanity()
                     self.place_orders()
 
                     # Check for reactive adjustments based on price movements
-                    if self.order_adjustment_engine:
-                        reactive_adjustments = self._check_for_reactive_adjustments()
-                        if reactive_adjustments:
-                            logger.debug("🚨 Reactive adjustments triggered")
+                    reactive_adjustments = self._check_for_reactive_adjustments()
+                    if reactive_adjustments:
+                        logger.debug("🚨 Reactive adjustments triggered")
 
                     # Print enhanced status periodically if enabled
                     if enhanced_reporting:
@@ -2226,7 +1998,7 @@ class OrderManager:
                 time.sleep(5)  # Brief pause on error
 
 
-def run_enhanced():
+def run_enhanced(args=None):
     """Run the enhanced market maker with all enhanced features enabled."""
     logger.info("TrueX Enhanced Market Maker Version: %s" % constants.VERSION)
 
@@ -2256,18 +2028,3 @@ def run_enhanced():
     finally:
         if order_manager:
             order_manager.exit()
-
-
-def run():
-    logger.info("TrueX Market Maker Version: %s\n" % constants.VERSION)
-
-    om = OrderManager()
-    # Try/except just keeps ctrl-c from printing an ugly stacktrace
-    try:
-        om.run_loop()
-    except (KeyboardInterrupt, SystemExit):
-        om.exit()
-
-
-if __name__ == "__main__":
-    run()

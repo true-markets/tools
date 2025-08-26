@@ -520,24 +520,7 @@ class TruexDataProvider(ExternalDataProvider):
                 for task in tasks_to_cancel:
                     task.cancel()
 
-                # Wait for tasks to be cancelled with proper exception handling
-                try:
-                    # Use asyncio.wait instead of gather to avoid propagating CancelledError
-                    done, pending = await asyncio.wait(
-                        tasks_to_cancel, timeout=2.0, return_when=asyncio.ALL_COMPLETED
-                    )
-
-                    # Check for any remaining pending tasks
-                    if pending:
-                        logger.warning(
-                            f"Some tasks did not complete: {len(pending)} pending"
-                        )
-                        for task in pending:
-                            task.cancel()
-
-                except Exception as e:
-                    # Suppress expected cancellation exceptions
-                    logger.debug(f"Expected exception during task cancellation: {e}")
+                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
 
             # Stop the event loop
             self.ws_loop.stop()
@@ -932,7 +915,8 @@ class TrueX:
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.provider.disconnect())
+            loop.run_until_complete(self.provider.unsubscribe(self.symbol))
+            loop.close()
         except Exception as e:
             logger.warning(f"Error during exit: {e}")
         finally:
