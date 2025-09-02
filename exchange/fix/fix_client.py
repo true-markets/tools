@@ -14,6 +14,9 @@ import base64
 import argparse
 import math
 import random
+import bisect
+import locale
+import re
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -152,6 +155,68 @@ def GeneratePassword(secret, sending_time, msg_type, msg_seq_num, sender_comp_id
 
     return signature
 
+class Quote:
+    def __init__(self, price: float, size: float):
+        self.price = price
+        self.size = size
+
+    def __lt__(self, other):
+        return self.price < other.price
+
+    def __repr__(self):
+        return f"Quote(price={self.price}, size={self.size})"
+
+class QuoteQueue:
+    def __init__(self, ascending=True):
+        self.quotes = []
+        self.price_map = {}  # price -> Quote
+        self.ascending = ascending
+
+    def _sort_key(self, price):
+        return price if self.ascending else -price
+
+    def add_or_update(self, price: float, size: float):
+        if price in self.price_map:
+            order = self.price_map[price]
+            order.size = size
+            if size == 0:
+                self.remove(price)
+        else:
+            if size == 0:
+                return
+            order = Quote(price, size)
+            bisect.insort(self.quotes, order if self.ascending else Quote(-price, size))
+            self.price_map[price] = order
+
+    def remove(self, price: float):
+        if price in self.price_map:
+            order = self.price_map.pop(price)
+            key = price if self.ascending else -price
+            index = next((i for i, o in enumerate(self.quotes) if o.price == key), None)
+            if index is not None:
+                self.quotes.pop(index)
+
+    def head(self):
+        if not self.quotes:
+            return Quote(0.0, 0.0)
+        order = self.quotes[0]
+        return self.price_map[abs(order.price)] if not self.ascending else order
+
+    def top_n(self, n=5):
+        result = []
+        for i in range(n):
+            if i < len(self.quotes):
+                order = self.quotes[i]
+                actual_price = abs(order.price) if not self.ascending else order.price
+                actual_order = self.price_map.get(actual_price, Quote(0.0, 0.0))
+                result.append(actual_order)
+            else:
+                result.append(Quote(0.0, 0.0))
+        return result
+
+    def __repr__(self):
+        return repr([self.price_map[abs(o.price)] if not self.ascending else o for o in self.quotes])
+
 # =============================
 # CommandEdit: Custom Edit Widget
 # =============================
@@ -235,10 +300,8 @@ class CommandEdit(urwid.Edit):
 class MarketDataWidget(urwid.WidgetWrap):
     def __init__(self, symbol):
         self.symbol = symbol
-        self.buy_qty = 0
-        self.buy_price = 0.0
-        self.sell_qty = 0
-        self.sell_price = 0.0
+        self.buys = QuoteQueue(ascending=False)
+        self.sells = QuoteQueue(ascending=True)
 
         # Create a text widget displaying header, separator, and market data.
         self.text_widget = urwid.Text(self._get_market_data_text(), align="center")
@@ -248,30 +311,43 @@ class MarketDataWidget(urwid.WidgetWrap):
 
     def _get_market_data_text(self):
         # Define a header line.
-        header = f"{'Symbol':<10} {'Bid Qty':>9} {'Bid Price':>13}  x  {'Ask Price':<13} {'Ask Qty':<9}"
+        header = f"{'Symbol':<10} {'Bid Qty':>10} {'Bid Price':>13}  x  {'Ask Price':<13} {'Ask Qty':<10}"
         # Create a separator line matching the header's length.
         dash_line = '-' * len(header)
-        # Define the data row with proper formatting.
-        data_line = f"{self.symbol:<10} {self.buy_qty:>9.6f} {self.buy_price:>13.6f}  x  {self.sell_price:<13.6f} {self.sell_qty:<9.6f}"
+        first = True;
+        for (bid, offer) in zip(self.buys.top_n(5), self.sells.top_n(5)):
+            if first:
+                data_line = f"{self.symbol:<10} {bid.size:>10.6f} {bid.price:>13.6f}  x  {offer.price:<13.6f} {offer.size:<10.6f}\n"
+                first = False
+            else:
+                data_line += f"{'':<10} {bid.size:>10.6f} {bid.price:>13.6f}  x  {offer.price:<13.6f} {offer.size:<10.6f}\n"
+        # remove tailing newline
+        data_line = data_line.rstrip('\n')
+
         # Combine the header, separator, and data row.
         return f"{header}\n{dash_line}\n{data_line}"
+
+    def remove_market_data(self, side, qty, price):
+        """
+        Remove market data for a specific side, quantity, and price.
+        """
+        if side == "BID":
+            self.buys.remove(price)
+        elif side == "OFFER":
+            self.sells.remove(price)
+        # Update the displayed text.
+        self.text_widget.set_text(self._get_market_data_text())
 
     def update_market_data(self, side, qty, price):
         """
         Update the market data and refresh the display.
         """
         if side == "BID":
-            self.buy_qty = qty
-            self.buy_price = price
+            self.buys.add_or_update(price, qty)
         elif side == "OFFER":
-            self.sell_qty = qty
-            self.sell_price = price
-        elif side == "OFFER/TRADE":
-            self.sell_qty -= qty
-        elif side == "BID/TRADE":
-            self.buy_qty -= qty
-        # Update the displayed text.
+            self.sells.add_or_update(price, qty)
         self.text_widget.set_text(self._get_market_data_text())
+
 
 class MarketDataPanel(urwid.Pile):
     def __init__(self, dividechars=1):
@@ -327,21 +403,168 @@ class MarketDataPanel(urwid.Pile):
         self.widgets[symbol] = new_widget
         # Append the new widget to our local items list.
         self.items.append(new_widget)
+        self._invalidate()
+
+    def RemoveMarketData(self, symbol):
+        """
+        Remove a market data widget by its symbol.
+        """
+        if symbol in self.widgets:
+            # Remove the widget from the dictionary and items list.
+            del self.widgets[symbol]
+            self.items = [w for w in self.items if w.symbol != symbol]
+            # Invalidate the layout to trigger a re-render.
+            self._invalidate()
+        else:
+            raise ValueError(f"Market data for symbol {symbol} does not exist.")
 
     def UpdateMarketData(self, market_data):
         return self._updateMarketData(*market_data)
 
-    def _updateMarketData(self, symbol, side, qty, price):
+    def _updateMarketData(self, symbol, action, side, qty, price):
         """
         Update the market data for a specific symbol.
         """
         if symbol in self.widgets:
-            # Update the widget's data.
-            self.widgets[symbol].update_market_data(side, qty, price)
+            if action == 'UNSUB':
+                self.RemoveMarketData(symbol)
+            elif action == 'DELETE':
+                self.widgets[symbol].remove_market_data(side, qty, price)
+            else:
+                self.widgets[symbol].update_market_data(side, qty, price)
         else:
             # If the symbol is not found, add a new widget.
             self.AddMarketData(symbol, side, qty, price)
+
+class InstrumentWidget(urwid.WidgetWrap):
+    def __init__(self, symbol, notional=0.0, volume=0.0):
+        self.symbol = symbol
+        self.notional = notional
+        self.volume = volume
+        self.text_widget = urwid.Text("", align="center")
+        line_box = urwid.LineBox(self.text_widget, title=f"{symbol}", title_align="center")
+        super().__init__(line_box)
+
+    def _get_instrument_text(self):
+        def _add_commas_to_wholepart(num_str):
+            return re.sub(r"(?<=\d)(?=(\d{3})+$)", ",", num_str)
+        notional = self.notional
+        if (not '.' in notional):
+            notional = f"${notional}.00"
+        else:
+            notional = f"${notional}"
+        # add comma for thousands if necessary without converting to a float
+        if notional.count('.') == 1:
+            parts = notional.split('.')
+            parts[0] = _add_commas_to_wholepart(parts[0])
+            notional = '.'.join(parts)
+
+        # Format the text to display notional and volume.
+        return f"24hr notional: {notional}\n24hr volume: {self.volume}"
+
+    def update_instrument(self, notional, volume):
+        self.notional = notional
+        self.volume = volume
+        self.text_widget.set_text(self._get_instrument_text())
+
+class InstrumentPanel(urwid.Pile):
+    def __init__(self, dividechars=1):
+        # Start with an empty list of columns.
+        self.widgets = {}
+        self.columns = []
+        self.items = []
+        self.dividechars = dividechars
+        super().__init__(self.items)
+
+    def render(self, size, focus=False):
+        maxcol = size[0]
+        rows = []
+        row = []
+        space_left = maxcol
+
+        # if no widgets, display text message
+        if not self.items:
+            # Display a fallback message when the terminal is too small.
+            warning = urwid.Text(
+                '\nNo instruments available.\n\nSee "instrument" command to receive instruments data.\n',
+                align='center'
+            )
+            self.contents = [(warning, ('pack', None))]
+            return super().render(size, focus)
+
+        # Calculate the max width required by the child widgets.
+        child_width = max([w.pack()[0] for w in self.items])
+        for widget in self.items:
+            if space_left < child_width and row:
+                # Add current row as Columns to rows
+                rows.append(urwid.Columns(row, dividechars=self.dividechars))
+                row = []
+                space_left = maxcol
+
+            row.append(widget)
+            space_left -= (child_width + self.dividechars)
+
+        if row:
+            rows.append(urwid.Columns(row, dividechars=self.dividechars))
+
+        # Rebuild Pile contents
+        self.contents = [(r, ('pack', None)) for r in rows]
+        return super().render(size, focus)
+
+    def AddInstrument(self, symbol, notional=0.0, volume=0.0):
+        """
+        Add a new instrument widget to the columns.
+        """
+        new_widget = InstrumentWidget(symbol, notional, volume)
+        new_widget.update_instrument(notional, volume)
+        self.widgets[symbol] = new_widget
+        # Append the new widget to our local items list.
+        self.items.append(new_widget)
+        self._invalidate()
+
+    def ModifyInstrument(self, action, symbol, notional=0.0, volume=0.0):
+        """
+        Modify an existing instrument widget.
+        """
+        if symbol in self.widgets:
+            # Update the existing widget's notional and volume.
+            self.widgets[symbol].update_instrument(notional, volume)
+            # Invalidate the layout to trigger a re-render.
             self._invalidate()
+        else:
+            raise ValueError(f"Instrument for symbol {symbol} does not exist.")
+
+    def RemoveInstrument(self, symbol):
+        """
+        Remove an instrument widget by its symbol.
+        """
+        if symbol in self.widgets:
+            # Remove the widget from the dictionary and items list.
+            del self.widgets[symbol]
+            self.items = [w for w in self.items if w.symbol != symbol]
+            # Invalidate the layout to trigger a re-render.
+            self._invalidate()
+        else:
+            raise ValueError(f"Instrument for symbol {symbol} does not exist.")
+
+    def UpdateInstrument(self, instrument):
+        self._UpdateInstrument(*instrument)
+
+    def _UpdateInstrument(self, action, symbol, notional=0.0, volume=0.0):
+        """
+        Update the instrument data for a specific symbol.
+        """
+        if action == 'DELETE':
+            self.RemoveInstrument(symbol)
+        elif action == 'MODIFY':
+            if symbol in self.widgets:
+                self.ModifyInstrument(action, symbol, notional, volume)
+            else:
+                self.AddInstrument(symbol, notional, volume)
+        else:
+            # If the symbol is not found, add a new widget.
+            self.AddInstrument(symbol, notional, volume)
+
 
 
 # =============================
@@ -352,13 +575,17 @@ class FIXApp(fix.Application):
     FIX Application subclass to handle FIX session events.
     Communicates with the UI via a thread-safe queue.
     """
-    def __init__(self, message_queue, market_data_queue, app_id):
+    def __init__(self, message_queue, market_data_queue, instrument_data_queue, app_id):
         super().__init__()
+        locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
         self.message_queue = message_queue
         self.market_data_queue = market_data_queue
+        self.instrument_data_queue = instrument_data_queue
         self.sessionID = None
         self.app_id = app_id  # Identifier for the FIX session
         self.reset_seq_num = True
+        # request ids
+        self.securityReqID_ = None
 
     def onCreate(self, sessionID):
         self.message_queue.put(f"Session created: {sessionID}")
@@ -382,6 +609,10 @@ class FIXApp(fix.Application):
         # Check if the message is a Logon message
         if msg_type.getValue() == fix.MsgType_Logon:
             self.sessionId = None
+
+            # Set ResetSeqNum
+            if self.reset_seq_num:
+                message.setField(fix.ResetSeqNumFlag(True))
 
             # Retrieve SendingTime from the header (Tag 52)
             sending_time =  datetime.utcnow().strftime('%Y%m%d-%H:%M:%S.%f')[:-3]
@@ -420,6 +651,10 @@ class FIXApp(fix.Application):
             self.onMarketDataSnapshotFullRefresh(message)
         elif msg_type.getValue() == fix.MsgType_MarketDataIncrementalRefresh:
             self.onMarketDataIncrementalRefresh(message)
+        elif msg_type.getValue() == fix.MsgType_SecurityList:
+            self.onSecurityList(message)
+        elif msg_type.getValue() == fix.MsgType_SecurityListUpdateReport:
+            self.onSecurityListUpdateReport(message)
         self.message_queue.put(f">RX> {message}")
 
     def toApp(self, message, sessionID):
@@ -477,7 +712,7 @@ class FIXApp(fix.Application):
                 md_type = "OFFER"
 
             if md_type:
-                self.market_data_queue.put((symbol.getValue(), md_type, md_entry_size.getValue(), md_entry_px.getValue()))
+                self.market_data_queue.put((symbol.getValue(), 0, md_type, md_entry_size.getValue(), md_entry_px.getValue()))
 
     def parse_market_data_incr(self, message):
         """
@@ -497,8 +732,11 @@ class FIXApp(fix.Application):
             md_entry_type = fix.MDEntryType()
             md_entry_px = fix.MDEntryPx()
             md_entry_size = fix.MDEntrySize()
+            md_action_type = fix.MDUpdateAction()
 
             group.getField(symbol)
+            if group.isSetField(md_action_type):
+                group.getField(md_action_type)
             if group.isSetField(md_update_type):
                 group.getField(md_update_type)
             if group.isSetField(md_entry_type):
@@ -507,6 +745,14 @@ class FIXApp(fix.Application):
                 group.getField(md_entry_px)
             if group.isSetField(md_entry_size):
                 group.getField(md_entry_size)
+
+            action_type = None
+            if md_action_type.getValue() == fix.MDUpdateAction_NEW:
+                action_type = "NEW"
+            elif md_action_type.getValue() == fix.MDUpdateAction_DELETE:
+                action_type = "DELETE"
+            elif md_action_type.getValue() == fix.MDUpdateAction_CHANGE:
+                action_type = "CHANGE"
 
             md_type = None
             if md_entry_type.getValue() == fix.MDEntryType_BID:
@@ -521,7 +767,84 @@ class FIXApp(fix.Application):
                     md_type = "BID/TRADE"
 
             if md_type:
-                self.market_data_queue.put((symbol.getValue(), md_type, md_entry_size.getValue(), md_entry_px.getValue()))
+                self.market_data_queue.put((symbol.getValue(), action_type, md_type, md_entry_size.getValue(), md_entry_px.getValue()))
+
+    def onSecurityList(self, message):
+        security_req_id = fix.SecurityReqID()
+        no_related_sym = fix.NoRelatedSym()
+        message.getField(security_req_id)
+        message.getField(no_related_sym)
+
+        num_entries = int(no_related_sym.getValue())
+        self.message_queue.put(f"Security List: ReqID={security_req_id.getValue()} NumEntries={num_entries}")
+        # Iterate over each instrument attr entry
+        for i in range(1, num_entries + 1):
+            group = fix50sp2.SecurityList.NoRelatedSym()
+            symbol = fix.Symbol()
+
+            message.getGroup(i, group)
+            group.getField(symbol)
+            attrs = self._get_instr_attribs(group)
+            self.message_queue.put(f"  Symbol={symbol.getValue()} NumAttrs={len(attrs)}")
+            self.instrument_data_queue.put(("ADD", symbol.getValue(), attrs[40], attrs[41]))
+
+    def onSecurityListUpdateReport(self, message):
+        security_req_id = fix.SecurityReqID()
+        no_related_sym = fix.NoRelatedSym()
+        message.getField(security_req_id)
+        message.getField(no_related_sym)
+
+        num_entries = int(no_related_sym.getValue())
+        self.message_queue.put(f"Security List Update: ReqID={security_req_id.getValue()} NumEntries={num_entries}")
+        # Iterate over each market data entry
+        for i in range(1, num_entries + 1):
+            group = fix50sp2.SecurityListUpdateReport.NoRelatedSym()
+            message.getGroup(i, group)
+            symbol = fix.Symbol()
+            group.getField(symbol)
+
+            list_update_action = fix.ListUpdateAction()
+            group.getField(list_update_action)
+
+            action = None
+            if list_update_action.getValue() == 'A':
+                action = "ADD"
+            elif list_update_action.getValue() == 'D':
+                action = "DELETE"
+            elif list_update_action.getValue() == 'M':
+                action = "MODIFY"
+
+            # Iterate over each instrument attr entry
+            for i in range(1, num_entries + 1):
+                group = fix50sp2.SecurityList.NoRelatedSym()
+                symbol = fix.Symbol()
+
+                message.getGroup(i, group)
+                group.getField(symbol)
+                attrs = self._get_instr_attribs(group)
+                self.message_queue.put(f"  Symbol={symbol.getValue()} Action={action} NumAttrs={len(attrs)}")
+                self.instrument_data_queue.put((action, symbol.getValue(), attrs[40], attrs[41]))
+
+
+    def _get_instr_attribs(self, group):
+        """
+        Helper function to retrieve instrument attributes from a group.
+        """
+        num_attrs = int(group.getField(870))
+        order = fix.IntArray(3)
+        order[0] = 871
+        order[1] = 872
+        order[2] = 0
+        attrs = {}
+        for i in range(1, num_attrs + 1):
+            attr_group = fix.Group(870, 871, order)
+            group.getGroup(i, attr_group)
+            attr_type = fix.InstrAttribType()
+            attr_value = fix.InstrAttribValue()
+            attr_group.getField(attr_type)
+            attr_group.getField(attr_value)
+            attrs[attr_type.getValue()] = attr_value.getValue()
+        return attrs
 
     #staticmethod
     def ensure_session_id(method):
@@ -613,7 +936,7 @@ class FIXApp(fix.Application):
             self.message_queue.put("Failed to send order: FIX session not found.")
 
     @ensure_session_id
-    def subscribe_to_market_data(self, md_req_id, symbol):
+    def subscribe_to_market_data(self, md_req_id, symbol, depth):
         message = fix50sp2.MarketDataRequest()
         message.setField(fix.MDReqID(md_req_id))
         message.setField(
@@ -621,7 +944,7 @@ class FIXApp(fix.Application):
                 fix.SubscriptionRequestType_SNAPSHOT_PLUS_UPDATES
             )
         )
-        message.setField(fix.MarketDepth(0))
+        message.setField(fix.MarketDepth(depth))
         related_sym = fix50sp2.MarketDataRequest.NoRelatedSym()
         related_sym.setField(fix.Symbol(symbol))
         message.addGroup(related_sym)
@@ -633,7 +956,7 @@ class FIXApp(fix.Application):
             self.message_queue.put("Failed to subscribe to market data: FIX session not found.")
 
     @ensure_session_id
-    def unsubscribe_from_market_data(self, md_req_id):
+    def unsubscribe_from_market_data(self, md_req_id, symbol):
         message = fix50sp2.MarketDataRequest()
         message.setField(fix.MDReqID(md_req_id))
         message.setField(
@@ -646,8 +969,36 @@ class FIXApp(fix.Application):
         try:
             fix.Session.sendToTarget(message, self.sessionID)
             self.message_queue.put(f"Unsubscribed from market data: {md_req_id}")
+            if not symbol is None:
+                self.market_data_queue.put((symbol, "UNSUB", "", 0, 0))
         except fix.SessionNotFound:
             self.message_queue.put("Failed to unsubscribe from market data: FIX session not found.")
+
+    @ensure_session_id
+    def security_list_request(self, request, symbol=None):
+        if (self.securityReqID_ == None):
+            self.securityReqID_ = str(uuid.uuid4())
+
+        message = fix50sp2.SecurityListRequest()
+        message.setField(fix.SecurityReqID(self.securityReqID_))
+        if symbol == None:
+            message.setField(fix.SecurityListRequestType(4))
+        else:
+            message.setField(fix.SecurityListRequestType(0))
+            message.setField(fix.Symbol(symbol))
+
+        if request == "SNAPSHOT":
+            message.setField(fix.SubscriptionRequestType(fix.SubscriptionRequestType_SNAPSHOT))
+        elif request == "UPDATES":
+            message.setField(fix.SubscriptionRequestType(fix.SubscriptionRequestType_SNAPSHOT_PLUS_UPDATES))
+        elif request == "DISABLE":
+            message.setField(fix.SubscriptionRequestType(fix.SubscriptionRequestType_DISABLE_PREVIOUS_SNAPSHOT_PLUS_UPDATE_REQUEST))
+
+        try:
+            fix.Session.sendToTarget(message, self.sessionID)
+            self.message_queue.put(f"Security List Request sent: {request} {symbol if symbol else 'ALL'}")
+        except fix.SessionNotFound:
+            self.message_queue.put("Failed to send Security List Request: FIX session not found.")
 
     def send_logout(self):
         if self.sessionID:
@@ -670,9 +1021,10 @@ class FIXInterface:
     - Bottom: Input field
     Communicates with the FIXApp via queues.
     """
-    def __init__(self, message_queue, market_data_queue, fix_app):
+    def __init__(self, message_queue, market_data_queue, instrument_data_queue, fix_app):
         self.message_queue = message_queue
         self.market_data_queue = market_data_queue
+        self.instrument_data_queue = instrument_data_queue
         self.fix_app = fix_app
 
         # Create widgets
@@ -680,8 +1032,11 @@ class FIXInterface:
         self.output = urwid.ListBox(urwid.SimpleFocusListWalker([]))
         self.md = MarketDataPanel()
         self.md_output = urwid.LineBox(self.md, title="Market Data")
+        self.inst = InstrumentPanel()
+        self.inst_output = urwid.LineBox(self.inst, title="Instruments")
         self.main_pane = urwid.Pile([self.output])
         self.input = CommandEdit()
+        self.panes = []
 
         # Session data
         self.client_index = -1
@@ -751,10 +1106,46 @@ class FIXInterface:
         if cmd == "help":
             self.help()
         elif cmd == "md" or cmd == "market_data":
-            if (len(self.main_pane.contents) > 1):
-                self.main_pane.contents.pop(0)
+            if "md" in self.panes:
+                try:
+                    idx = self.panes.index("md")
+                    self.main_pane.contents.pop(idx)
+                    self.panes.pop(idx)
+                except ValueError:
+                    pass
             else:
+                self.panes.insert(0, "md")
                 self.main_pane.contents.insert(0, (self.md_output, ('pack', None)))
+        elif cmd == "instrument":
+            if len(parts) == 1:
+                if "inst" in self.panes:
+                    try:
+                        idx = self.panes.index("inst")
+                        self.main_pane.contents.pop(idx)
+                        self.panes.pop(idx)
+                    except ValueError:
+                        pass
+                else:
+                    self.panes.insert(0, "inst")
+                    self.main_pane.contents.insert(0, (self.inst_output, ('pack', None)))
+                return
+
+            if len(parts) == 2:
+                self.display_message("Usage: instrument <request> [symbol]")
+                request = parts[1].upper()
+                if request not in ["SNAPSHOT", "UPDATES", "DISABLE"]:
+                    self.display_message("Invalid instrument request type. Use SNAPSHOT, UPDATES, or DISABLE.")
+                else:
+                    self.fix_app.security_list_request(request)
+            elif len(parts) == 3:
+                request = parts[1].upper()
+                symbol = parts[2].upper()
+                if request not in ["SNAPSHOT", "UPDATES", "DISABLE"]:
+                    self.display_message("Invalid instrument request type. Use SNAPSHOT, UPDATES, or DISABLE.")
+                else:
+                    self.fix_app.security_list_request(request, symbol)
+            else:
+                self.display_message("Usage: instrument <request> [symbol]")
         elif cmd in ("exit", "quit"):
             self.exit()
         elif cmd == "use":
@@ -876,20 +1267,28 @@ class FIXInterface:
                 except ValueError:
                     self.display_message("Invalid parameters. Usage: cancel <orig_cl_ord_id> <client_index>")
         elif cmd == "subscribe":
-            if len(parts) != 3:
-                self.display_message("Usage: subscribe <md_req_id> <symbol>")
+            if len(parts) < 3 or len(parts) > 4:
+                self.display_message("Usage: subscribe <md_req_id> <symbol> <depth>")
             else:
                 md_req_id = parts[1]
                 symbol = parts[2]
+                if len(parts) == 4:
+                    depth = int(parts[3])
+                else:
+                    depth = 5
                 # Send a subscription request
-                self.fix_app.subscribe_to_market_data(md_req_id, symbol)
+                self.fix_app.subscribe_to_market_data(md_req_id, symbol, depth)
         elif cmd == "unsubscribe":
-            if len(parts) != 2:
-                self.display_message("Usage: unsubscribe <md_req_id>")
+            if len(parts) < 2 or len(parts) > 3:
+                self.display_message("Usage: unsubscribe <md_req_id> [symbol]")
             else:
+                symbol = None
+
                 md_req_id = parts[1]
+                if len(parts) == 3:
+                    symbol = parts[2]
                 # Send an unsubscription request
-                self.fix_app.unsubscribe_from_market_data(md_req_id)
+                self.fix_app.unsubscribe_from_market_data(md_req_id, symbol)
         elif cmd == "logout":
             if len(parts) != 1:
                 self.display_message("Usage: logout")
@@ -911,11 +1310,12 @@ class FIXInterface:
             "  buy|sell <symbol> <type> <tif> <price> <size> [client_index]             Send a new order\n"
             "  modify <orig_cl_ord_id> <new_price> <new_size> <new_type> [client_index] Modify an existing order\n"
             "  cancel <orig_cl_ord_id> [client_index]                                   Cancel an existing order\n"
-            "  subscribe <md_req_id> <symbol>                                           Subscribe to market data\n"
-            "  unsubscribe <md_req_id>                                                  Unsubscribe from market data\n"
+            "  subscribe <md_req_id> <symbol> [depth]                                   Subscribe to market data\n"
+            "  unsubscribe <md_req_id> [symbol]                                         Unsubscribe from market data\n"
+            "  instrument <request> <symbol>                                            Request instrument details\n"
             "  logout                                                                   Logout from FIX session\n"
             "  exit / quit                                                              Exit the application\n\n"
-            "Note: arguments in square brackets are optional if set using the 'use' command"
+            "Note: arguments in square brackets are optional.\n"
         )
         for line in help_text.split('\n'):
             self.display_message(line)
@@ -945,12 +1345,16 @@ class FIXInterface:
             market_data = self.market_data_queue.get_nowait()
             self.md.UpdateMarketData(market_data)
 
+        while not self.instrument_data_queue.empty():
+            instrument_data = self.instrument_data_queue.get_nowait()
+            self.inst.UpdateInstrument(instrument_data)
+
         while not self.message_queue.empty():
             message = self.message_queue.get_nowait()
             self.display_message(message)
 
         # Schedule the next check
-        loop.set_alarm_in(0.5, self.process_message_queue)
+        loop.set_alarm_in(0.16, self.process_message_queue)
 
     def run(self):
         """
@@ -1015,9 +1419,10 @@ def main():
     # Create a thread-safe queue for messages from FIXApp to UI
     message_queue = queue.Queue()
     market_data_queue = queue.Queue()
+    instrument_data_queue = queue.Queue()
 
     # Initialize the FIX application
-    fix_app = FIXApp(message_queue, market_data_queue, app_id="FIX_Client")
+    fix_app = FIXApp(message_queue, market_data_queue, instrument_data_queue, app_id="FIX_Client")
     fix_app.env = env
     # Grab key ID and secret from env vars
     fix_app.apiKeyId = os.getenv("TRUEX_KEY_ID")
@@ -1029,7 +1434,7 @@ def main():
     fix_thread.start()
 
     # Initialize the UI interface
-    interface = FIXInterface(message_queue, market_data_queue, fix_app)
+    interface = FIXInterface(message_queue, market_data_queue, instrument_data_queue, fix_app)
 
     # Run the UI
     interface.run()
