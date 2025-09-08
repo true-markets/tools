@@ -6,6 +6,12 @@ from market_maker.external_data.base import ExternalDataManager
 from market_maker.pricing.base import OrderPricingResult, PricingModel, PricingResult
 from market_maker.utils import log
 
+from .simple_spread import SimpleSpreadModel
+from .consensus import ConsensusModel
+from .local_aware import LocalMarketAwareModel
+from .momentum import MomentumModel
+from .external import ExternalDataModel
+
 logger = log.setup_custom_logger("pricing_manager")
 
 
@@ -17,6 +23,47 @@ class PricingModelManager:
         self.models: Dict[str, PricingModel] = {}
         self.model_preferences = []  # Ordered list of preferred models
         self.last_results = {}  # symbol -> PricingResult
+
+    def setup_pricing_models(self, models_config: dict) -> None:
+        for model_name, config in models_config.items():
+            if not config.get("enabled", False):
+                continue
+
+            priority = config.get("priority", 100)
+
+            if model_name == "simple_spread":
+                model = SimpleSpreadModel(
+                    spread_bps=config.get("spread_bps", 50),
+                    reference_provider=config.get("reference_provider", "coinbase"),
+                )
+            elif model_name == "consensus":
+                model = ConsensusModel(
+                    min_providers=config.get("min_providers", 2),
+                    outlier_threshold=config.get("outlier_threshold", 0.02),
+                    base_spread_bps=config.get("base_spread_bps", 30),
+                )
+            elif model_name == "local_aware":
+                model = LocalMarketAwareModel(
+                    external_weight=config.get("external_weight", 0.7),
+                    local_weight=config.get("local_weight", 0.3),
+                    base_spread_bps=config.get("base_spread_bps", 40),
+                )
+            elif model_name == "momentum":
+                model = MomentumModel(
+                    lookback_minutes=config.get("lookback_minutes", 15),
+                    momentum_factor=config.get("momentum_factor", 0.1),
+                    base_spread_bps=config.get("base_spread_bps", 35),
+                )
+            elif model_name == "external":
+                model = ExternalDataModel(
+                    external_provider=config.get("external_provider", "coinbase"),
+                )
+            else:
+                logger.warning(f"Unknown pricing model: {model_name}")
+                continue
+
+            self.add_model(model, priority)
+            logger.info(f"Added {model_name} pricing model (priority: {priority})")
 
     def add_model(self, model: PricingModel, priority: int = 100) -> None:
         """Add a pricing model."""

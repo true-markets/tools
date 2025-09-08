@@ -194,7 +194,7 @@ PRICING_MODELS = {
     },
     "local_aware": {
         "enabled": True,
-        "priority": 60,  # Highest priority (lowest number)
+        "priority": 60,
         "config": {"external_weight": 0.7, "local_weight": 0.3, "base_spread_bps": 40},
     },
     "momentum": {
@@ -205,6 +205,11 @@ PRICING_MODELS = {
             "momentum_factor": 0.1,
             "base_spread_bps": 20,
         },
+    },
+    "external": {
+        "enabled": True,
+        "priority": 10,
+        "config": {"external_provider": "coinbase_rest"},
     },
 }
 
@@ -225,20 +230,10 @@ FALLBACK_TO_LOCAL_PRICING = True
 # If external price deviates more than this from local, fall back to local
 MAX_EXTERNAL_DEVIATION = 0.05  # increased for better external price adoption
 
-# Bootstrap mode - use external pricing even with large deviations
-# Set this to True if your local prices are very different from external markets
-# and you want to gradually align with external pricing
-BOOTSTRAP_TO_EXTERNAL = True
-
 # Bootstrap settings for handling market inconsistencies
 BOOTSTRAP_SPREAD_BUFFER = 0.001  # 0.1% buffer when bootstrapping from external data
 STARTUP_GRACE_PERIOD = 60  # Seconds to be tolerant of market inconsistencies on startup
 MAX_SANITY_FAILURES = 3  # Maximum sanity check failures before shutdown
-
-# External Data First Mode - prioritize external data over local data
-# When True, uses external market data as primary source and falls back to local only when external is unavailable
-# When False, uses traditional local-first approach with external as enhancement
-EXTERNAL_DATA_FIRST = True
 
 # Minimum external data age tolerance (seconds)
 # External data older than this will be considered stale and local data will be used instead

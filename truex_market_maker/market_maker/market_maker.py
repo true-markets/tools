@@ -9,38 +9,25 @@ import threading
 import time
 from datetime import datetime
 
+from market_maker.external_data.base import ExternalDataManager
+from market_maker.external_data.coinbase import (
+    CoinbaseProvider,
+    CoinbaseRESTProvider,
+)
+
 # our modules
 from market_maker.local_data import truex
+from market_maker.order_adjustment import OrderAdjustmentTracker
+from market_maker.pricing import (
+    ConsensusModel,
+    LocalMarketAwareModel,
+    MomentumModel,
+    PricingModelManager,
+    SimpleSpreadModel,
+)
 from market_maker.settings import settings
 from market_maker.utils import constants, log, math
 from market_maker.utils.tick import GetQuoteTick
-
-# Enhanced features (optional imports)
-try:
-    from market_maker.external_data.base import ExternalDataManager
-    from market_maker.external_data.coinbase import (
-        CoinbaseProvider,
-        CoinbaseRESTProvider,
-    )
-    from market_maker.pricing import (
-        ConsensusModel,
-        LocalMarketAwareModel,
-        MomentumModel,
-        PricingModelManager,
-        SimpleSpreadModel,
-    )
-
-    ENHANCED_FEATURES_AVAILABLE = True
-except ImportError:
-    ENHANCED_FEATURES_AVAILABLE = False
-
-# Order adjustment system (always available)
-try:
-    from market_maker.order_adjustment import OrderAdjustmentTracker
-
-    ORDER_ADJUSTMENT_AVAILABLE = True
-except ImportError:
-    ORDER_ADJUSTMENT_AVAILABLE = False
 
 #
 # Helpers
@@ -273,11 +260,6 @@ class OrderManager:
         self._pricing_cache = {}
         self._last_cache_clear = 0
 
-        # Determine if enhanced features should be enabled
-        if not ENHANCED_FEATURES_AVAILABLE:
-            logger.info("📊 Enhanced features not available (missing dependencies)")
-            return
-
         use_external_data = enable_external_data
         if use_external_data is None:
             use_external_data = getattr(settings, "USE_EXTERNAL_DATA", False)
@@ -335,13 +317,6 @@ class OrderManager:
                 else:
                     logger.warning(f"Unknown provider type: {provider_type}")
 
-            # Allow user customization
-            custom_manager = self.setup_custom_external_data_provider(
-                external_data_manager
-            )
-            if custom_manager:
-                external_data_manager = custom_manager
-
             if external_data_manager.providers:
                 logger.info(
                     f"📡 External data manager initialized with {len(external_data_manager.providers)} providers"
@@ -359,50 +334,9 @@ class OrderManager:
         """Setup pricing models."""
         try:
             pricing_manager = PricingModelManager(self.external_data_manager)
-
             # Add configured models based on settings
             models_config = getattr(settings, "PRICING_MODELS", {})
-
-            for model_name, config in models_config.items():
-                if not config.get("enabled", False):
-                    continue
-
-                priority = config.get("priority", 100)
-
-                if model_name == "simple_spread":
-                    model = SimpleSpreadModel(
-                        spread_bps=config.get("spread_bps", 50),
-                        reference_provider=config.get("reference_provider", "coinbase"),
-                    )
-                elif model_name == "consensus":
-                    model = ConsensusModel(
-                        min_providers=config.get("min_providers", 2),
-                        outlier_threshold=config.get("outlier_threshold", 0.02),
-                        base_spread_bps=config.get("base_spread_bps", 30),
-                    )
-                elif model_name == "local_aware":
-                    model = LocalMarketAwareModel(
-                        external_weight=config.get("external_weight", 0.7),
-                        local_weight=config.get("local_weight", 0.3),
-                        base_spread_bps=config.get("base_spread_bps", 40),
-                    )
-                elif model_name == "momentum":
-                    model = MomentumModel(
-                        lookback_minutes=config.get("lookback_minutes", 15),
-                        momentum_factor=config.get("momentum_factor", 0.1),
-                        base_spread_bps=config.get("base_spread_bps", 35),
-                    )
-                else:
-                    logger.warning(f"Unknown pricing model: {model_name}")
-                    continue
-
-                pricing_manager.add_model(model, priority)
-                logger.info(f"Added {model_name} pricing model (priority: {priority})")
-
-            # Allow user customization
-            custom_manager = self.setup_custom_pricing_model(pricing_manager)
-            if custom_manager:
-                pricing_manager = custom_manager
+            pricing_manager.setup_pricing_models(models_config)
 
             if pricing_manager.models:
                 logger.info(
@@ -425,12 +359,10 @@ class OrderManager:
             threshold = getattr(settings, "PRICE_MOVE_THRESHOLD", 0.002)
             cooldown = getattr(settings, "ORDER_ADJUSTMENT_COOLDOWN", 30)
             logger.info(f"🎯 Order adjustment system initialized")
+            logger.info(f"Price move threshold: {threshold:.5f} ({threshold*100:.3f}%)")
+            logger.info(f"Adjustment cooldown: {cooldown}s")
             logger.info(
-                f"   📊 Price move threshold: {threshold:.5f} ({threshold*100:.3f}%)"
-            )
-            logger.info(f"   ⏱️ Adjustment cooldown: {cooldown}s")
-            logger.info(
-                f"   🎛️ Max order age: {getattr(settings, 'MAX_ORDER_AGE_SECONDS', 300)}s"
+                f"Max order age: {getattr(settings, 'MAX_ORDER_AGE_SECONDS', 300)}s"
             )
 
         except Exception as e:
@@ -587,59 +519,7 @@ class OrderManager:
 
     def get_ticker(self, symbol):
         # Get local ticker data (always needed as fallback)
-        local_ticker = self.markets[symbol].get_ticker()
-
-        # Check if we should use external data first
-        external_first = getattr(settings, "EXTERNAL_DATA_FIRST", False)
-
-        # If external first mode and we're in startup period, wait a bit for external data
-        if external_first and self.external_data_manager:
-            time_since_startup = (datetime.now() - self.start_time).total_seconds()
-            startup_wait = getattr(
-                settings, "EXTERNAL_DATA_STARTUP_WAIT", 10
-            )  # Wait up to 10s for external data
-
-            if (
-                time_since_startup < startup_wait
-                and not self.external_data_manager.get_all_data(symbol)
-            ):
-                logger.info(
-                    f"⏳ Waiting for external data for {symbol} (startup: {time_since_startup:.1f}s/{startup_wait}s)"
-                )
-                # Brief wait to allow external data to populate
-                time.sleep(1)
-                # Check again after the wait
-                if not self.external_data_manager.get_all_data(symbol):
-                    logger.info(
-                        f"⚠️ Still no external data for {symbol} after wait, proceeding with available data"
-                    )
-
-        if external_first and self.external_data_manager:
-            # Try external data first
-            external_ticker = self._get_external_ticker(symbol, local_ticker)
-            if external_ticker:
-                ticker = external_ticker
-                data_source = "external"
-
-                # Log the adjustment for visibility
-                local_mid = local_ticker.get("mid", 0)
-                ext_mid = external_ticker.get("mid", 0)
-                if local_mid > 0 and ext_mid > 0:
-                    deviation = abs(ext_mid - local_mid) / local_mid * 100
-                    logger.info(
-                        f"🎯 Adjusting to external market: {symbol} local={local_mid:.2f} → external={ext_mid:.2f} (Δ{deviation:.6f}%)"
-                    )
-            else:
-                ticker = local_ticker
-                data_source = "local (external unavailable)"
-                # Log why external data wasn't used
-                logger.debug(
-                    f"⚠️ External data not available for {symbol}, using local data"
-                )
-        else:
-            # Use local ticker (traditional approach)
-            ticker = local_ticker
-            data_source = "local"
+        ticker = self.markets[symbol].get_ticker()
 
         # Set up our buy & sell positions based on the chosen ticker
         # Start with smallest possible unit above and below the current spread
@@ -671,19 +551,13 @@ class OrderManager:
         self.start_position_mid = ticker["mid"]
 
         logger.info(
-            "📊 Start Positions (%s): Buy: %f, Sell: %f, Mid: %f"
+            "📊 Start Positions: Buy: %f, Sell: %f, Mid: %f"
             % (
-                data_source,
                 self.start_position_buy[symbol],
                 self.start_position_sell[symbol],
                 self.start_position_mid,
             )
         )
-
-        # Store the data source for status reporting
-        if not hasattr(self, "_data_sources"):
-            self._data_sources = {}
-        self._data_sources[symbol] = data_source
 
         # Return the local ticker for compatibility (other code may expect local market data)
         return ticker
@@ -739,78 +613,22 @@ class OrderManager:
 
         # Check for excessive deviation from local price
         max_deviation = getattr(settings, "MAX_EXTERNAL_DEVIATION", 0.10)
-        bootstrap_mode = getattr(settings, "BOOTSTRAP_TO_EXTERNAL", False)
         local_mid = local_ticker.get("mid", pricing_result.fair_value)
 
         if local_mid > 0:
             deviation = abs(pricing_result.fair_value - local_mid) / local_mid
 
             if deviation > max_deviation:
-                if bootstrap_mode:
-                    logger.debug(
-                        f"🚀 {symbol} BOOTSTRAP MODE: Using external despite {deviation:.2%} deviation"
-                    )
-                    return True
-                else:
-                    # Only log occasionally to avoid spam
-                    current_time = time.time()
-                    last_tip = getattr(self, f"_last_deviation_tip_{symbol}", 0)
-                    if current_time - last_tip > 60:  # Once per minute
-                        logger.info(
-                            f"💡 {symbol}: Large price deviation {deviation:.2%}. Set BOOTSTRAP_TO_EXTERNAL = True to override."
-                        )
-                        setattr(self, f"_last_deviation_tip_{symbol}", current_time)
-                    return False
-            else:
-                logger.debug(
-                    f"✅ {symbol} external pricing accepted (deviation: {deviation:.2%})"
+                logger.info(
+                    f"💡 {symbol}: price deviation {deviation:2%} exceeds {max_deviation:.2%}."
                 )
+                return False
+
+            logger.debug(
+                f"✅ {symbol} external pricing accepted (deviation: {deviation:.2%})"
+            )
 
         return True
-
-    def _calculate_offset_from_pricing(self, pricing_result, index: int) -> float:
-        """Calculate order price offset from pricing result."""
-        if index < 0:  # Buy side
-            base_price = pricing_result.bid_price
-        else:  # Sell side
-            base_price = pricing_result.ask_price
-
-        # Apply interval adjustments like original logic
-        # Adjust index for positioning (first positions start at base price)
-        adjusted_index = index + 1 if index < 0 else index - 1
-
-        # Apply interval spacing
-        price = base_price * (1 + settings.INTERVAL) ** adjusted_index
-
-        # Ensure proper tick size
-        tick_size = GetQuoteTick(price)
-        return math.toNearest(price, tick_size)
-
-    ###
-    # Extension Points for User Customization
-    ###
-
-    def setup_custom_external_data_provider(self, external_data_manager):
-        """Extension point: Override to add custom external data providers.
-
-        Args:
-            external_data_manager: The ExternalDataManager instance
-
-        Returns:
-            Modified external_data_manager or None to use default setup
-        """
-        return None
-
-    def setup_custom_pricing_model(self, pricing_manager):
-        """Extension point: Override to add custom pricing models.
-
-        Args:
-            pricing_manager: The PricingModelManager instance
-
-        Returns:
-            Modified pricing_manager or None to use default setup
-        """
-        return None
 
     def validate_pricing_result(
         self, symbol: str, pricing_result, local_ticker
@@ -826,69 +644,6 @@ class OrderManager:
             True if pricing should be used, False otherwise
         """
         return self._is_pricing_valid(symbol, pricing_result, local_ticker)
-
-    def calculate_order_price(
-        self, symbol: str, index: int, pricing_result=None
-    ) -> float:
-        """Extension point: Override to customize order price calculation.
-
-        Args:
-            symbol: Trading symbol
-            index: Order index (negative for buy, positive for sell)
-            pricing_result: Optional pricing model result
-
-        Returns:
-            Calculated price for the order
-        """
-        if pricing_result and self.validate_pricing_result(
-            symbol, pricing_result, self.markets[symbol].get_ticker()
-        ):
-            return self._calculate_offset_from_pricing(pricing_result, index)
-        else:
-            return self._get_original_price_offset(symbol, index)
-
-    def should_place_order(self, symbol: str, order_data: dict) -> bool:
-        """Extension point: Override to add custom order placement logic.
-
-        Args:
-            symbol: Trading symbol
-            order_data: Dictionary containing order details
-
-        Returns:
-            True if order should be placed, False otherwise
-        """
-        # Default: always place orders (original behavior)
-        return True
-
-    def on_order_placed(self, symbol: str, order_result, order_data: dict):
-        """Extension point: Called after an order is placed.
-
-        Args:
-            symbol: Trading symbol
-            order_result: Result from order placement API
-            order_data: Dictionary containing order details
-        """
-        pass
-
-    def on_order_amended(self, symbol: str, amend_result, amend_data: dict):
-        """Extension point: Called after an order is amended.
-
-        Args:
-            symbol: Trading symbol
-            amend_result: Result from order amendment API
-            amend_data: Dictionary containing amendment details
-        """
-        pass
-
-    def on_order_cancelled(self, symbol: str, cancel_result, order_id: str):
-        """Extension point: Called after an order is cancelled.
-
-        Args:
-            symbol: Trading symbol
-            cancel_result: Result from order cancellation API
-            order_id: ID of cancelled order
-        """
-        pass
 
     ###
     # Enhanced Market Maker Features
@@ -1063,10 +818,6 @@ class OrderManager:
         for symbol in symbols:
             logger.info(f"📊 === Enhanced Status for {symbol} ===")
 
-            # Show current data source being used for orders
-            data_source = getattr(self, "_data_sources", {}).get(symbol, "unknown")
-            logger.info(f"🎯 Current Order Data Source: {data_source}")
-
             # Print local market data
             try:
                 ticker = self.markets[symbol].get_ticker()
@@ -1186,94 +937,6 @@ class OrderManager:
 
                 except Exception as e:
                     logger.debug(f"Error getting order adjustment status: {e}")
-
-    def _attempt_external_bootstrap(self, symbol: str, local_ticker: dict) -> bool:
-        """Attempt to bootstrap pricing from external market data when local market is inconsistent.
-
-        Returns True if bootstrap was attempted, False otherwise.
-        """
-        if not self.external_data_manager:
-            return False
-
-        # Check if bootstrap mode is enabled
-        bootstrap_enabled = getattr(settings, "BOOTSTRAP_TO_EXTERNAL", False)
-        if not bootstrap_enabled:
-            logger.debug(
-                f"Bootstrap not attempted for {symbol}: BOOTSTRAP_TO_EXTERNAL is disabled"
-            )
-            return False
-
-        try:
-            # Get external market data
-            external_data = self.external_data_manager.get_all_data(symbol)
-            if not external_data:
-                logger.debug(
-                    f"Bootstrap not attempted for {symbol}: no external data available"
-                )
-                return False
-
-            # Get best external bid/ask
-            best_external = self.external_data_manager.get_best_bid_ask(symbol)
-            if not best_external:
-                logger.debug(
-                    f"Bootstrap not attempted for {symbol}: no best external prices available"
-                )
-                return False
-
-            ext_bid = best_external["bid"]
-            ext_ask = best_external["ask"]
-            ext_mid = best_external["mid"]
-
-            if ext_bid <= 0 or ext_ask <= 0:
-                logger.debug(
-                    f"Bootstrap not attempted for {symbol}: invalid external prices (bid={ext_bid}, ask={ext_ask})"
-                )
-                return False
-
-            # Calculate adjustment based on external data
-            local_mid = local_ticker.get("mid", 0)
-            if local_mid > 0:
-                price_deviation = abs(ext_mid - local_mid) / local_mid
-                logger.info(
-                    f"🚀 BOOTSTRAP: {symbol} external mid={ext_mid:.2f} vs local mid={local_mid:.2f} "
-                    f"(deviation: {price_deviation:.2%})"
-                )
-
-            # Adjust start positions to external market with some spread buffer
-            spread_buffer = getattr(
-                settings, "BOOTSTRAP_SPREAD_BUFFER", 0.001
-            )  # 0.1% buffer
-
-            # Set new start positions based on external market
-            self.start_position_buy[symbol] = ext_bid * (1 - spread_buffer)
-            self.start_position_sell[symbol] = ext_ask * (1 + spread_buffer)
-            self.start_position_mid = ext_mid
-
-            # Ensure minimum spread is maintained
-            if (
-                self.start_position_buy[symbol] * (1.00 + settings.MIN_SPREAD)
-                > self.start_position_sell[symbol]
-            ):
-
-                # Widen the spread to meet minimum requirements
-                mid_point = (
-                    self.start_position_buy[symbol] + self.start_position_sell[symbol]
-                ) / 2
-                half_min_spread = settings.MIN_SPREAD / 2
-
-                self.start_position_buy[symbol] = mid_point * (1 - half_min_spread)
-                self.start_position_sell[symbol] = mid_point * (1 + half_min_spread)
-
-            logger.info(
-                f"🚀 BOOTSTRAP: Adjusted {symbol} positions to external market: "
-                f"buy={self.start_position_buy[symbol]:.2f}, sell={self.start_position_sell[symbol]:.2f}"
-            )
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Error during external bootstrap for {symbol}: {e}")
-            return False
 
     def _get_external_ticker(self, symbol: str, local_ticker: dict) -> dict:
         """Get external market data formatted as a ticker.
@@ -1741,14 +1404,11 @@ class OrderManager:
                 amended_order["client_id"] = self.markets[symbol].get_client()
 
             # This can fail if an order has closed in the time we were processing.
-            # The API will send us `invalid ordStatus`, which means that the order's 
+            # The API will send us `invalid ordStatus`, which means that the order's
             # status (Filled/Canceled) made it not amendable.
             # If that happens, we need to catch it and re-tick.
             try:
                 amend_result = self.markets[symbol].amend_orders(to_amend)
-                # Call extension point for each amended order
-                for amended_order in to_amend:
-                    self.on_order_amended(symbol, amend_result, amended_order)
                 if self.order_adjustment_tracker:
                     self.order_adjustment_tracker.record_adjustment(symbol)
             except Exception as e:
@@ -1756,22 +1416,12 @@ class OrderManager:
 
         if len(to_create) > 0:
             for order in reversed(to_create):
-                # Check if order should be placed (extension point)
-                if not self.should_place_order(symbol, order):
-                    logger.info(
-                        f"Skipping order creation for {symbol} due to custom logic"
-                    )
-                    continue
-
                 logger.info(
                     "Creating %4s %10s %s @ %s"
                     % (order["side"], order["symbol"], order["qty"], order["price"])
                 )
 
-            # Create orders and call extension point
             create_results = self.markets[symbol].create_orders(to_create)
-            for order, result in zip(to_create, create_results or []):
-                self.on_order_placed(symbol, result, order)
 
         # Could happen if we exceed a delta limit
         if len(to_cancel) > 0:
@@ -1779,8 +1429,6 @@ class OrderManager:
             # Cancel orders and call extension point
             for order in to_cancel:
                 cancel_result = self.markets[symbol].truex.CancelOrder(order["id"])
-                self.on_order_cancelled(symbol, cancel_result, order["id"])
-
         # Activate adjustment cooldown if we made pricing adjustments this cycle
         if (
             symbol in self._adjustments_made_this_cycle
@@ -1859,30 +1507,7 @@ class OrderManager:
                     )
                 )
 
-                # Try to bootstrap from external data if available (mainly for non-external-first mode)
-                bootstrap_attempted = False
-                external_first = getattr(settings, "EXTERNAL_DATA_FIRST", False)
-
-                if not external_first:
-                    # Only try bootstrap if we're not already using external data first
-                    bootstrap_attempted = self._attempt_external_bootstrap(
-                        symbol, ticker
-                    )
-
-                if is_startup_period and (bootstrap_attempted or external_first):
-                    if external_first:
-                        logger.warning(
-                            f"⚠️ Market data inconsistent for {symbol} despite using external data first. "
-                            f"This may indicate external data quality issues. "
-                            f"Will retry (startup grace period: {self.startup_grace_period - time_since_startup:.1f}s remaining)"
-                        )
-                    else:
-                        logger.warning(
-                            f"⚠️ Market data inconsistent for {symbol} - attempted bootstrap from external data. "
-                            f"Will retry (startup grace period: {self.startup_grace_period - time_since_startup:.1f}s remaining)"
-                        )
-                    continue  # Skip to next symbol, don't increment failure count
-                elif is_startup_period:
+                if is_startup_period:
                     self.sanity_check_failures += 1
                     logger.warning(
                         f"⚠️ Market data inconsistent for {symbol} (failure {self.sanity_check_failures}/{self.max_sanity_failures}). "
@@ -1900,7 +1525,6 @@ class OrderManager:
                 if self.sanity_check_failures >= self.max_sanity_failures:
                     logger.error(
                         f"❌ Maximum sanity check failures exceeded ({self.max_sanity_failures}). "
-                        "Consider enabling BOOTSTRAP_TO_EXTERNAL or checking market data sources."
                     )
                     logger.info("🛑 Initiating graceful shutdown...")
                     self._graceful_shutdown()
