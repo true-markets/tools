@@ -1,7 +1,7 @@
 # TrueX Market Maker
 
 ![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)
 ![Status](https://img.shields.io/badge/status-beta-yellow.svg)
 
 A sophisticated automated market maker for TrueX with external data integration, advanced pricing models, and intelligent order management.
@@ -577,7 +577,14 @@ This provides detailed information about:
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+Apache License 2.0 - see [LICENSE](LICENSE) file for details.
+
+## 🙏 Attribution
+
+This project is derived from the [BitMEX Sample Market Maker](https://github.com/BitMEX/sample-market-maker) by BitMEX, licensed under the Apache License 2.0. Significant modifications have been made to adapt it for TrueX exchange and add enhanced features including external data integration, advanced pricing models, and intelligent order management.
+
+Original work: Copyright (c) BitMEX
+Derivative work: Copyright (c) 2024 Spencer
 
 ## 🤝 Contributing
 
