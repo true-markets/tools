@@ -16,7 +16,7 @@ class ExternalDataModel(PricingModel):
     def __init__(self, external_provider: str = "coinbase"):
         super().__init__("external_data")
         self.external_provider = external_provider
-    
+
     def get_required_providers(self) -> List[str]:
         return [self.external_provider]
 

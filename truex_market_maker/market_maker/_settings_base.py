@@ -11,7 +11,7 @@ HOST = environ["TRUEX_HOST"]
 REST_PORT = environ["TRUEX_REST_PORT"]
 BASE_REST_URL = f"http://{HOST}:{REST_PORT}/api/v1"
 WS_PORT = environ["TRUEX_WS_PORT"]
-BASE_WS_URL = f"ws://{HOST}:{WS_PORT}"
+BASE_WS_URL = f"ws://{HOST}:{WS_PORT}/v1/api"
 
 # The TrueX API requires permanent API keys.
 API_KEY = environ["TRUEX_API_KEY"]
@@ -126,11 +126,8 @@ ORDERID_PREFIX = "mm-trx-"
 
 # If any of these files (and this file) changes, reload the bot.
 WATCHED_FILES = [
-    join("market_maker", "market_maker.py"),
-    join("market_maker", "local_data", "truex.py"),
     join("market_maker", "settings.py"),
 ]
-
 
 ########################################################################################################################
 # External Market Data
@@ -169,9 +166,6 @@ EXTERNAL_SYMBOL_MAPPING = {
 ########################################################################################################################
 # Pricing Models
 ########################################################################################################################
-
-# Enable external pricing models
-USE_PRICING_MODELS = True
 
 # Default pricing model if none specified
 DEFAULT_PRICING_MODEL = "local_aware"

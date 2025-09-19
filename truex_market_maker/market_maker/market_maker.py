@@ -89,8 +89,8 @@ class MarketInterface:
                 self.client_id = entry["id"]
                 return self.client_id
 
-        logger.error("No matching ID found for user: %s." % settings.TRUEX_USER)
-        raise Exception("No matching ID found for user: %s." % settings.TRUEX_USER)
+        logger.error("No matching ID found for user: %s." % settings.API_USER)
+        raise Exception("No matching ID found for user: %s." % settings.API_USER)
 
     def get_delta(self):
         return self.get_position()["qty"]
@@ -190,15 +190,11 @@ class OrderManager:
     def __init__(
         self,
         enable_external_data=None,
-        enable_pricing_models=None,
-        auto_start_enhanced=False,
     ):
         """Initialize OrderManager with optional enhanced features.
 
         Args:
             enable_external_data: Enable external data integration (default: from settings)
-            enable_pricing_models: Enable pricing models (default: from settings)
-            auto_start_enhanced: Automatically start enhanced features like external data collection
         """
         self.queue = queue.Queue(4096)
         if settings.DRY_RUN:
@@ -220,13 +216,12 @@ class OrderManager:
 
         self.running = True
         self.start_time = datetime.now()
-        self.auto_start_enhanced = auto_start_enhanced
         self.external_thread = None
         self.external_event_loop = None
         self.external_main_task = None  # Track the main external data task
         self.startup_grace_period = getattr(settings, "STARTUP_GRACE_PERIOD", 60)
         self.sanity_check_failures = 0
-        self.max_sanity_failures = getattr(settings, "MAX_SANITY_FAILURES", 3)
+        self.max_sanity_failures = getattr(settings, "MAX_SANITY_FAILURES", 10)
 
         self.order_adjustment_tracker = None
         # Order adjustment system initialization (before enhanced features for logging)
@@ -239,8 +234,23 @@ class OrderManager:
         self._last_pricing_snapshot = {}  # symbol -> pricing_result
         self._last_price_check = time.time()
 
-        # Enhanced features initialization
-        self._init_enhanced_features(enable_external_data, enable_pricing_models)
+        self.external_data_manager = None
+        self.pricing_manager = None
+
+        if enable_external_data is None:
+            enable_external_data = getattr(settings, "USE_EXTERNAL_DATA", False)
+
+        if enable_external_data:
+            self.external_data_manager = self._setup_external_data()
+
+        logger.info("setting up pricing manager")
+        self.pricing_manager = self._setup_pricing_models()
+
+        if self.external_data_manager:
+            self._start_external_data_collection()
+
+        logger.info("📊 Enhanced features initialized successfully")
+        self.log_configuration()
 
         # register exit handler that will always cancel orders on any error.
         atexit.register(self.exit)
@@ -249,48 +259,6 @@ class OrderManager:
         if settings.CANCEL_ORDERS_ON_START:
             for symbol in settings.SYMBOLS:
                 self.markets[symbol].cancel_all_orders()
-
-    def _init_enhanced_features(
-        self, enable_external_data=None, enable_pricing_models=None
-    ):
-        """Initialize enhanced features (external data and pricing models)."""
-        # Initialize enhanced features as None by default
-        self.external_data_manager = None
-        self.pricing_manager = None
-        self._pricing_cache = {}
-        self._last_cache_clear = 0
-
-        use_external_data = enable_external_data
-        if use_external_data is None:
-            use_external_data = getattr(settings, "USE_EXTERNAL_DATA", False)
-
-        use_pricing_models = enable_pricing_models
-        if use_pricing_models is None:
-            use_pricing_models = getattr(settings, "USE_PRICING_MODELS", False)
-
-        if not use_external_data and not use_pricing_models:
-            logger.info("📊 Enhanced features disabled by configuration")
-            return
-
-        # Initialize external data manager if enabled
-        if use_external_data:
-            self.external_data_manager = self._setup_external_data()
-
-        # Initialize pricing models if enabled
-        if use_pricing_models and self.external_data_manager:
-            logger.info("📊 setting up pricing manager")
-            self.pricing_manager = self._setup_pricing_models()
-
-        if self.external_data_manager or self.pricing_manager:
-            logger.info("📊 Enhanced features initialized successfully")
-
-        # Auto-start external data collection if requested
-        if self.auto_start_enhanced and self.external_data_manager:
-            self._start_external_data_collection()
-
-        # Log enhanced status if auto-start is enabled
-        if self.auto_start_enhanced:
-            self._log_enhanced_status()
 
     def _setup_external_data(self):
         """Setup external data providers."""
@@ -633,16 +601,6 @@ class OrderManager:
     def validate_pricing_result(
         self, symbol: str, pricing_result, local_ticker
     ) -> bool:
-        """Extension point: Override to add custom pricing validation.
-
-        Args:
-            symbol: Trading symbol
-            pricing_result: PricingResult from pricing model
-            local_ticker: Local market ticker data
-
-        Returns:
-            True if pricing should be used, False otherwise
-        """
         return self._is_pricing_valid(symbol, pricing_result, local_ticker)
 
     ###
@@ -751,25 +709,21 @@ class OrderManager:
                 except Exception as e:
                     logger.warning(f"Error during external event loop cleanup: {e}")
 
-    def _log_enhanced_status(self):
+    def log_configuration(self):
         """Log the enhanced configuration status."""
-        logger.info("🚀 === Enhanced Market Maker Configuration ===")
+        logger.info("🚀 === Market Maker Configuration ===")
 
         # Data source priority
-        external_first = getattr(settings, "EXTERNAL_DATA_FIRST", False)
-        if external_first:
-            logger.info("🌐 Data Priority: ✅ External First (with local fallback)")
-            logger.info(
-                f"   📊 Max External Age: {getattr(settings, 'MAX_EXTERNAL_DATA_AGE', 30)}s"
-            )
-            logger.info(
-                f"   📊 Min Providers: {getattr(settings, 'EXTERNAL_DATA_MIN_PROVIDERS', 1)}"
-            )
-            logger.info(
-                f"   📊 Max Spread: {getattr(settings, 'EXTERNAL_DATA_MAX_SPREAD_PCT', 2.0)}%"
-            )
-        else:
-            logger.info("🏠 Data Priority: Local First (with external enhancement)")
+        logger.info("🌐 Data Priority: ✅ External First (with local fallback)")
+        logger.info(
+            f"   📊 Max External Age: {getattr(settings, 'MAX_EXTERNAL_DATA_AGE', 30)}s"
+        )
+        logger.info(
+            f"   📊 Min Providers: {getattr(settings, 'EXTERNAL_DATA_MIN_PROVIDERS', 1)}"
+        )
+        logger.info(
+            f"   📊 Max Spread: {getattr(settings, 'EXTERNAL_DATA_MAX_SPREAD_PCT', 2.0)}%"
+        )
 
         # External data status
         if self.external_data_manager:
@@ -781,20 +735,11 @@ class OrderManager:
             logger.info("📡 External Data: ❌ Disabled")
 
         # Pricing models status
-        if self.pricing_manager:
-            model_count = len(self.pricing_manager.models)
-            logger.info(f"💰 Pricing Models: ✅ Enabled ({model_count} models)")
-            for name, model in self.pricing_manager.models.items():
-                enabled_status = "✅" if model.enabled else "❌"
-                logger.info(f"   🎯 {name}: {enabled_status}")
-        else:
-            logger.info("💰 Pricing Models: ❌ Disabled")
-
-        # Bootstrap settings
-        bootstrap_enabled = getattr(settings, "BOOTSTRAP_TO_EXTERNAL", False)
-        logger.info(
-            f"🚀 Bootstrap Mode: {'✅ Enabled' if bootstrap_enabled else '❌ Disabled'}"
-        )
+        model_count = len(self.pricing_manager.models)
+        logger.info(f"💰 Pricing Models: ✅ Enabled ({model_count} models)")
+        for name, model in self.pricing_manager.models.items():
+            enabled_status = "✅" if model.enabled else "❌"
+            logger.info(f"   🎯 {name}: {enabled_status}")
 
         # Order adjustment system status
         if self.order_adjustment_tracker:
@@ -810,24 +755,19 @@ class OrderManager:
 
         logger.info("🚀 === Configuration Complete ===")
 
-    def print_enhanced_status(self, symbols=None):
+    def print_status(self):
         """Print enhanced status including external data and pricing info."""
-        if symbols is None:
-            symbols = settings.SYMBOLS
 
-        for symbol in symbols:
+        for symbol in settings.SYMBOLS:
             logger.info(f"📊 === Enhanced Status for {symbol} ===")
 
             # Print local market data
-            try:
-                ticker = self.markets[symbol].get_ticker()
-                orders = self.markets[symbol].get_orders()
-                logger.info(
-                    f"Local Market: {ticker['buy']:.4f} / {ticker['sell']:.4f} (mid: {ticker['mid']:.4f})"
-                )
-                logger.info(f"Active Orders: {len(orders)}")
-            except Exception as e:
-                logger.error(f"Error getting local ticker for {symbol}: {e}")
+            ticker = self.markets[symbol].get_ticker()
+            orders = self.markets[symbol].get_orders()
+            logger.info(
+                f"Local Market: {ticker['buy']:.4f} / {ticker['sell']:.4f} (mid: {ticker['mid']:.4f})"
+            )
+            logger.info(f"Active Orders: {len(orders)}")
 
             # Print external data status
             if self.external_data_manager:
@@ -1154,7 +1094,7 @@ class OrderManager:
                 }
             )
 
-    def _check_for_reactive_adjustments(self) -> bool:
+    def maintain_orders(self) -> bool:
         """Check if significant price movements require immediate order adjustments.
 
         Returns True if any adjustments were triggered.
@@ -1308,10 +1248,6 @@ class OrderManager:
                 if not self.short_position_limit_exceeded(symbol):
                     sell_orders.append(self.prepare_order(symbol, i))
             self.converge_orders(symbol, buy_orders, sell_orders)
-
-            # Don't run order adjustments immediately after converge_orders to avoid conflicts
-            # Order adjustments will run on subsequent loops when prices actually move
-            # This prevents the adjustment system from fighting with converge_orders
 
     def relist_order(self, desired_order, current_order) -> bool:
         price_ratio = float(desired_order["price"]) / float(
@@ -1576,15 +1512,8 @@ class OrderManager:
                     f"SELL {symbol}: {sell['order_info']['qty']} @ {sell['order_info']['price']}"
                 )
 
-    def run_loop(self, enhanced_reporting=None):
-        """Main run loop.
-
-        Args:
-            enhanced_reporting: Enable enhanced status reporting (defaults to auto_start_enhanced)
-        """
-        if enhanced_reporting is None:
-            enhanced_reporting = self.auto_start_enhanced
-
+    def run_loop(self):
+        """Main run loop."""
         while self.running:
             try:
                 # Check for symbol-specific updates
@@ -1593,21 +1522,14 @@ class OrderManager:
                     self.update_pricing([symbol])
                     self.check_sanity()
                     self.place_orders([symbol])
+                    self.print_status()
 
                 except queue.Empty:
                     # Regular interval processing when no symbol-specific updates
                     self.update_pricing()
                     self.check_sanity()
-                    self.place_orders()
-
-                    # Check for reactive adjustments based on price movements
-                    reactive_adjustments = self._check_for_reactive_adjustments()
-                    if reactive_adjustments:
-                        logger.debug("🚨 Reactive adjustments triggered")
-
-                    # Print enhanced status periodically if enabled
-                    if enhanced_reporting:
-                        self.print_enhanced_status()
+                    self.maintain_orders()
+                    self.print_status()
 
                 except Exception as e:
                     # Handle other queue-related exceptions but don't swallow KeyboardInterrupt
@@ -1622,7 +1544,7 @@ class OrderManager:
                 time.sleep(5)  # Brief pause on error
 
 
-def run_enhanced(args=None):
+def run(args):
     """Run the enhanced market maker with all enhanced features enabled."""
     logger.info("TrueX Enhanced Market Maker Version: %s" % constants.VERSION)
 
@@ -1639,9 +1561,7 @@ def run_enhanced(args=None):
 
     try:
         order_manager = OrderManager(
-            enable_external_data=True,
-            enable_pricing_models=True,
-            auto_start_enhanced=True,
+            enable_external_data=not args.disable_external_data
         )
         order_manager.run_loop()
     except KeyboardInterrupt:

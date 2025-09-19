@@ -2,31 +2,24 @@
 """
 TrueX Market Maker - Unified Launcher
 
-This script automatically detects and runs the appropriate mode:
-- Basic Mode: Traditional market making with local data only
-- Enhanced Mode: Advanced features with external data integration and pricing models
-
-Mode Detection:
-    The script automatically detects the mode based on your settings.py configuration.
-    You can also override the mode using command line flags.
-
 Usage:
-    ./scripts/run [options] [symbol]
+    ./scripts/run [options]
 
 Options:
-    --basic         Force basic mode (disable enhanced features)
-    --enhanced      Force enhanced mode (enable all enhanced features)
-    --help         Show this help message
+    --disable-external-data       Only use local data for pricing and decision making
+    --symbols                     List of symbols to make markets in
+    --help                        Show this help message
 
 Examples:
-    ./scripts/run BTC-PYUSD                    # Auto-detect mode from settings
-    ./scripts/run --enhanced BTC-PYUSD         # Force enhanced mode
-    ./scripts/run --basic BTC-PYUSD            # Force basic mode
-    ./scripts/run BTC-PYUSD ETH-PYUSD          # Multiple symbols
+    ./scripts/run --symbols BTC-PYUSD ETH-PYUSD          # Multiple symbols
 
 Environment Variables Required:
-    TRUEX_HOST, TRUEX_REST_PORT, TRUEX_WS_PORT
-    TRUEX_API_KEY, TRUEX_SECRET_KEY, TRUEX_USER
+    TRUEX_HOST       = true markets server
+    TRUEX_REST_PORT  = rest server port 
+    TRUEX_WS_PORT    = websocket server port
+    TRUEX_API_KEY    = true market's assigned api key 
+    TRUEX_SECRET_KEY = true market's assigned api secret
+    TRUEX_USER       = your mnemonic associated with a true markets client
 """
 
 import argparse
@@ -36,21 +29,13 @@ import sys
 # Add the project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-
 def main():
     parser = argparse.ArgumentParser(
-        description='TrueX Market Maker - Unified Launcher',
+        description='TrueX Market Maker',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
-Mode Detection:
-  The script automatically detects enhanced mode from your settings.py:
-  - Enhanced mode if USE_EXTERNAL_DATA=True or USE_PRICING_MODELS=True
-  - Basic mode otherwise
-  
-  You can override this behavior with --basic or --enhanced flags.
-
 Examples:
-  ./scripts/run BTC-PYUSD                    # Auto-detect from settings
+  ./scripts/run --symbols BTC-PYUSD
         '''
     )
     
@@ -58,12 +43,8 @@ Examples:
     mode_group.add_argument(
         '--disable-external-data', 
         action='store_true',
+        default=False,
         help='Disable external market data'
-    )
-    mode_group.add_argument(
-        '--disable-pricing-models', 
-        action='store_true',
-        help='Disable pricing models'
     )
     
     parser.add_argument(
@@ -88,7 +69,7 @@ Examples:
     from market_maker import market_maker
 
     # Run the market maker
-    market_maker.run_enhanced(args)
+    market_maker.run(args)
 
 if __name__ == "__main__":
     main()

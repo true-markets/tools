@@ -6,11 +6,11 @@ from market_maker.external_data.base import ExternalDataManager
 from market_maker.pricing.base import OrderPricingResult, PricingModel, PricingResult
 from market_maker.utils import log
 
-from .simple_spread import SimpleSpreadModel
 from .consensus import ConsensusModel
+from .external import ExternalDataModel
 from .local_aware import LocalMarketAwareModel
 from .momentum import MomentumModel
-from .external import ExternalDataModel
+from .simple_spread import SimpleSpreadModel
 
 logger = log.setup_custom_logger("pricing_manager")
 
