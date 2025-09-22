@@ -32,7 +32,7 @@ def QueryRest(ctx, method, path, body = None):
     HEADER_AUTH_TOKEN = "x-truex-auth-token"
 
     url = ""
-    if ctx.env.lower() == "local":
+    if ctx.env == "local":
         host = os.getenv("TRUEX_HOST")
         port = os.getenv("TRUEX_REST_PORT")
         url = f"http://{host}:{port}"
@@ -40,6 +40,8 @@ def QueryRest(ctx, method, path, body = None):
         url = "http://dev1.truex.co:9742"
     elif ctx.env.lower() == "uat":
         url = "http://uat.truex.co:9742"
+    elif ctx.env == "prod":
+        url = "https://prod.truex.co"
 
     url += path
 
@@ -321,8 +323,9 @@ class MarketDataWidget(urwid.WidgetWrap):
                 first = False
             else:
                 data_line += f"{'':<10} {bid.size:>10.6f} {bid.price:>13.6f}  x  {offer.price:<13.6f} {offer.size:<10.6f}\n"
-        # remove tailing newline
-        data_line = data_line.rstrip('\n')
+        # add last line with book mid point and spread
+        # align mid and spread to the right of the last line
+        data_line += f"{'':<10} mid: {((self.buys.head().price + self.sells.head().price) / 2):>13.6f}  |  spread: {(self.sells.head().price - self.buys.head().price):>10.6f}"
 
         # Combine the header, separator, and data row.
         return f"{header}\n{dash_line}\n{data_line}"
@@ -581,34 +584,64 @@ class FIXApp(fix.Application):
         self.message_queue = message_queue
         self.market_data_queue = market_data_queue
         self.instrument_data_queue = instrument_data_queue
-        self.sessionID = None
+        self.sessions = {}
         self.app_id = app_id  # Identifier for the FIX session
         self.reset_seq_num = True
         # request ids
         self.securityReqID_ = None
 
+    def OrderEntrySession(self):
+        if self.env == "local":
+            return self.sessions.get("TRUEX_LCL_OE", self.sessions["TRUEX_LCL_GW"])
+        if self.env == "dev":
+           return self.sessions.get("TRUEX_DEV_OE", self.sessions["TRUEX_DEV_GW"])
+        if self.env == "uat":
+           return self.sessions.get("TRUEX_UAT_OE", self.sessions["TRUEX_UAT_GW"])
+        if self.env == "prod":
+           return self.sessions.get("TRUEX_PROD_OE", self.session["TRUEX_PROD_GW"])
+
+        return None
+
+    def MarketDataSession(self):
+        if self.env == "local":
+            return self.sessions.get("TRUEX_LCL_MD", self.sessions["TRUEX_LCL_GW"])
+        if self.env == "dev":
+           return self.sessions.get("TRUEX_DEV_MD", self.sessions["TRUEX_DEV_GW"])
+        if self.env == "uat":
+           return self.sessions.get("TRUEX_UAT_MD", self.sessions["TRUEX_UAT_GW"])
+        if self.env == "prod":
+           return self.sessions.get("TRUEX_PROD_MD", self.session["TRUEX_PROD_GW"])
+
+        return None
+
     def onCreate(self, sessionID):
+        self.sessions[sessionID.getTargetCompID().getValue()] = sessionID
         self.message_queue.put(f"Session created: {sessionID}")
 
     def onLogon(self, sessionID):
-        self.sessionID = sessionID
+        self.sessions[sessionID.getTargetCompID().getValue()] = sessionID
         self.clientIds = GetClientIds(self)
         self.instrumentIds = GetInstrumentIds(self)
+        for key, instrument in self.instrumentIds.items():
+            self.message_queue.put(f"Instrument: {key} Symbol: {instrument['info']['symbol']}")
         if (sessionID != None):
             self.message_queue.put(f"Logon successful: {sessionID}")
         else:
             self.message_queue.put("Logon failed!")
 
+        self.message_queue.put("Sessions: " + ", ".join(self.sessions.keys()))
+
     def onLogout(self, sessionID):
         self.message_queue.put(f"Logout: {sessionID}")
-        self.sessionID = None
+        self.sessions.pop(sessionID.getTargetCompID().getValue(), None)
 
     def toAdmin(self, message, sessionID):
+         # Determine the message type
         msg_type = fix.MsgType()
         message.getHeader().getField(msg_type)
         # Check if the message is a Logon message
         if msg_type.getValue() == fix.MsgType_Logon:
-            self.sessionId = None
+            self.message_queue.put(f"Preparing to send admin message {sessionID.toString()}")
 
             # Set ResetSeqNum
             if self.reset_seq_num:
@@ -621,7 +654,7 @@ class FIXApp(fix.Application):
             msg_seq_num = 1 if self.reset_seq_num else message.getHeader().getField(fix.MsgSeqNum()).getString()  # MsgSeqNum (34)
             sender_comp_id = message.getHeader().getField(fix.SenderCompID()).getString()  # SenderCompID (49)
             target_comp_id = message.getHeader().getField(fix.TargetCompID()).getString()  # TargetCompID (56)
-
+            self.message_queue.put(f"sending_time: {sending_time}, msg_type: {msg_type}, msg_seq_num: {msg_seq_num}, sender_comp_id: {sender_comp_id}, target_comp_id: {target_comp_id}")
             # Generate the HMAC-SHA-256 signature for the password
             password = GeneratePassword(self.apiKeySecret, sending_time, msg_type, msg_seq_num, sender_comp_id, target_comp_id, self.apiKeyId)
 
@@ -849,7 +882,7 @@ class FIXApp(fix.Application):
     #staticmethod
     def ensure_session_id(method):
         def wrapper(self, *args, **kwargs):
-            if not self.sessionID:
+            if len(self.sessions.keys()) <= 0:
                 self.message_queue.put("No active FIX session.")
                 return
             return method(self, *args, **kwargs)
@@ -887,7 +920,7 @@ class FIXApp(fix.Application):
         message.addGroup(party_group)
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.OrderEntrySession())
             side_str = "BUY" if side == fix.Side_BUY else "SELL"
             self.message_queue.put(f"Order sent: Symbol={symbol} Side={side_str} Price={price} Size={size} Client ID={client_id}")
         except fix.SessionNotFound:
@@ -912,7 +945,7 @@ class FIXApp(fix.Application):
         message.addGroup(party_group)
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.OrderEntrySession())
             self.message_queue.put(f"Modify sent: OrigClOrdId={orig_cl_ord_id}")
         except fix.SessionNotFound:
             self.message_queue.put("Failed to send order: FIX session not found.")
@@ -930,7 +963,7 @@ class FIXApp(fix.Application):
         message.addGroup(party_group)
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.OrderEntrySession())
             self.message_queue.put(f"Cancel sent: OrigClOrdId={orig_cl_ord_id}")
         except fix.SessionNotFound:
             self.message_queue.put("Failed to send order: FIX session not found.")
@@ -950,7 +983,7 @@ class FIXApp(fix.Application):
         message.addGroup(related_sym)
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.MarketDataSession());
             self.message_queue.put(f"Subscribed to market data: {symbol}")
         except fix.SessionNotFound:
             self.message_queue.put("Failed to subscribe to market data: FIX session not found.")
@@ -967,7 +1000,7 @@ class FIXApp(fix.Application):
         message.setField(fix.MarketDepth(0))
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.MarketDataSession());
             self.message_queue.put(f"Unsubscribed from market data: {md_req_id}")
             if not symbol is None:
                 self.market_data_queue.put((symbol, "UNSUB", "", 0, 0))
@@ -995,17 +1028,17 @@ class FIXApp(fix.Application):
             message.setField(fix.SubscriptionRequestType(fix.SubscriptionRequestType_DISABLE_PREVIOUS_SNAPSHOT_PLUS_UPDATE_REQUEST))
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.MarketDataSession());
             self.message_queue.put(f"Security List Request sent: {request} {symbol if symbol else 'ALL'}")
         except fix.SessionNotFound:
             self.message_queue.put("Failed to send Security List Request: FIX session not found.")
 
     def send_logout(self):
-        if self.sessionID:
+        for key, session in self.sessions.items():
             logout = fix.Message()
             logout.getHeader().setField(fix.MsgType("5"))  # Logout message type
             try:
-                fix.Session.sendToTarget(logout, self.sessionID)
+                fix.Session.sendToTarget(logout, session)
                 self.message_queue.put("Logout message sent.")
             except fix.SessionNotFound:
                 self.message_queue.put("Failed to send logout: FIX session not found.")
@@ -1423,7 +1456,7 @@ def main():
 
     # Initialize the FIX application
     fix_app = FIXApp(message_queue, market_data_queue, instrument_data_queue, app_id="FIX_Client")
-    fix_app.env = env
+    fix_app.env = env.lower()
     # Grab key ID and secret from env vars
     fix_app.apiKeyId = os.getenv("TRUEX_KEY_ID")
     fix_app.apiKeySecret = os.getenv("TRUEX_KEY_SECRET")
