@@ -296,6 +296,73 @@ class CommandEdit(urwid.Edit):
                 self.history_index = None
             return super().keypress(size, key)
 
+
+# =============================
+# TabbedPane: Simple Tab Widget
+# =============================
+class TabbedPane(urwid.WidgetWrap):
+    def __init__(self, tabs, active=None, on_change=None):
+        if not tabs:
+            raise ValueError("TabbedPane requires at least one tab.")
+
+        self._tab_order = [name for name, _ in tabs]
+        self._tab_widgets = {name: widget for name, widget in tabs}
+        self._tab_buttons = {}
+        self._on_change = on_change
+        self.active_tab = active or self._tab_order[0]
+        self._header = urwid.Columns([], dividechars=1)
+        self._body = urwid.WidgetPlaceholder(self._tab_widgets[self.active_tab])
+
+        super().__init__(urwid.Pile([('pack', self._header), self._body]))
+        self._build_header()
+
+    def _build_header(self):
+        contents = []
+        for name in self._tab_order:
+            button = urwid.Button(name)
+            urwid.connect_signal(
+                button,
+                'click',
+                self._on_tab_selected,
+                user_args=[name],
+            )
+            attr = 'tab_active' if name == self.active_tab else 'tab_inactive'
+            contents.append(
+                (
+                    urwid.AttrMap(button, attr, focus_map='reversed'),
+                    self._header.options('weight', 1),
+                )
+            )
+            self._tab_buttons[name] = button
+        self._header.contents = contents
+
+    def _on_tab_selected(self, tab_name, button):
+        if tab_name == self.active_tab:
+            return
+
+        self.activate(tab_name)
+
+    def activate(self, tab_name):
+        if tab_name not in self._tab_widgets:
+            raise ValueError(f"Unknown tab: {tab_name}")
+
+        self.active_tab = tab_name
+        self._body.original_widget = self._tab_widgets[tab_name]
+        self._build_header()
+        self._notify_tab_change()
+
+    def activate_next(self):
+        idx = self._tab_order.index(self.active_tab)
+        self.activate(self._tab_order[(idx + 1) % len(self._tab_order)])
+
+    def activate_previous(self):
+        idx = self._tab_order.index(self.active_tab)
+        self.activate(self._tab_order[(idx - 1) % len(self._tab_order)])
+
+    def _notify_tab_change(self):
+        if callable(self._on_change):
+            self._on_change(self.active_tab)
+
 # =============================
 # Custom Market Data Widget
 # =============================
@@ -668,11 +735,9 @@ class FIXApp(fix.Application):
             message.setField(fix.Password(password))  # Set tag 554
 
             self.message_queue.put("Sending Logon message.")
-        self.message_queue.put(f"<TX< {message}")
+            self.message_queue.put(f"<TX< {message}")
 
     def fromAdmin(self, message, sessionID):
-        msg_type = fix.MsgType()
-        message.getHeader().getField(msg_type)
         self.message_queue.put(f">RX> {message}")
 
     def fromApp(self, message, sessionID):
@@ -694,14 +759,132 @@ class FIXApp(fix.Application):
         """
         Handle application-level messages about to be sent to the counterparty.
         """
-        # For this example, we'll just log the message about to be sent
         self.message_queue.put(f"<TX< {message}")
         # optionally can throw DoNotSend if message should not
         # be sent to the  counterparty
 
     def onExecutionReport(self, message):
         exec_type = fix.ExecType()
-        message.getField(exec_type)
+        try:
+            message.getField(exec_type)
+        except fix.FieldNotFound:
+            self.message_queue.put("Execution report received without ExecType.")
+            return
+
+        exec_type_value = exec_type.getValue()
+
+        def safe_get(field_cls):
+            field = field_cls()
+            try:
+                message.getField(field)
+                return field.getValue()
+            except fix.FieldNotFound:
+                return None
+
+        cl_ord_id = safe_get(fix.ClOrdID)
+        symbol = safe_get(fix.Symbol)
+        side_value = safe_get(fix.Side)
+        ord_status_value = safe_get(fix.OrdStatus)
+        leaves_qty = safe_get(fix.LeavesQty)
+        cum_qty = safe_get(fix.CumQty)
+        avg_px = safe_get(fix.AvgPx)
+        last_qty = safe_get(fix.LastQty)
+        last_px = safe_get(fix.LastPx)
+        text = safe_get(fix.Text)
+        ord_rej_reason = safe_get(fix.OrdRejReason)
+
+        side_map = {
+            str(fix.Side_BUY): "BUY",
+            str(fix.Side_SELL): "SELL",
+        }
+        side_label = side_map.get(str(side_value)) if side_value is not None else None
+
+        ord_status_map = {
+            str(fix.OrdStatus_NEW): "NEW",
+            str(fix.OrdStatus_PARTIALLY_FILLED): "PARTIALLY_FILLED",
+            str(fix.OrdStatus_FILLED): "FILLED",
+            str(fix.OrdStatus_CANCELED): "CANCELED",
+            str(fix.OrdStatus_PENDING_CANCEL): "PENDING_CANCEL",
+            str(fix.OrdStatus_PENDING_NEW): "PENDING_NEW",
+            str(fix.OrdStatus_PENDING_REPLACE): "PENDING_REPLACE",
+            str(fix.OrdStatus_REJECTED): "REJECTED",
+            str(fix.OrdStatus_DONE_FOR_DAY): "DONE_FOR_DAY",
+            str(fix.OrdStatus_REPLACED): "REPLACED",
+            str(fix.OrdStatus_EXPIRED): "EXPIRED",
+        }
+        ord_status_label = (
+            ord_status_map.get(str(ord_status_value))
+            if ord_status_value is not None
+            else None
+        )
+
+        statuses = []
+        extras = []
+
+        trade_like_exec_types = {
+            fix.ExecType_PARTIAL_FILL,
+            fix.ExecType_FILL,
+        }
+        exec_type_trade = getattr(fix, "ExecType_TRADE", None)
+        if exec_type_trade:
+            trade_like_exec_types.add(exec_type_trade)
+
+        trade_metrics = []
+
+        def append_metric(label, value, target):
+            if value is None:
+                return
+            target.append(f"{label}={value}")
+
+        quantity_metrics = []
+        append_metric("LeavesQty", leaves_qty, quantity_metrics)
+        append_metric("CumQty", cum_qty, quantity_metrics)
+        append_metric("AvgPx", avg_px, quantity_metrics)
+
+        if exec_type_value == fix.ExecType_REJECTED:
+            if text:
+                extras.append(f"Reason={text}")
+            if ord_rej_reason is not None:
+                extras.append(f"RejCode={ord_rej_reason}")
+        elif exec_type_value == fix.ExecType_PARTIAL_FILL:
+            append_metric("LastQty", last_qty, trade_metrics)
+            append_metric("LastPx", last_px, trade_metrics)
+        elif exec_type_value == fix.ExecType_FILL:
+            append_metric("LastQty", last_qty, trade_metrics)
+            append_metric("LastPx", last_px, trade_metrics)
+        elif exec_type_trade and exec_type_value == exec_type_trade:
+            append_metric("LastQty", last_qty, trade_metrics)
+            append_metric("LastPx", last_px, trade_metrics)
+
+        if ord_status_label:
+            statuses.append(f"OrdStatus={ord_status_label}")
+
+        context_parts = []
+        for label, value in (
+            ("ClOrdID", cl_ord_id),
+            ("Symbol", symbol),
+            ("Side", side_label),
+        ):
+            if value is not None:
+                context_parts.append(f"{label}={value}")
+
+        if exec_type_value in trade_like_exec_types:
+            trade_metrics.extend(quantity_metrics)
+        else:
+            trade_metrics = quantity_metrics + trade_metrics
+
+        detail_sections = []
+        if statuses:
+            detail_sections.append(" ".join(statuses))
+        if context_parts:
+            detail_sections.append(" ".join(context_parts))
+        if trade_metrics:
+            detail_sections.append(" ".join(trade_metrics))
+        if extras:
+            detail_sections.append(" ".join(extras))
+
+        if len(detail_sections) > 0:
+            self.message_queue.put(" ".join(detail_sections))
 
     def onMarketDataSnapshotFullRefresh(self, message):
         symbol = fix.Symbol()
@@ -1062,12 +1245,20 @@ class FIXInterface:
 
         # Create widgets
         self.header = urwid.Text("FIX Trading Tool - Interactive CLI", align='center')
-        self.output = urwid.ListBox(urwid.SimpleFocusListWalker([]))
+        self.command_output = urwid.ListBox(urwid.SimpleFocusListWalker([]))
+        self.fix_output = urwid.ListBox(urwid.SimpleFocusListWalker([]))
+        self.output_tabs = TabbedPane(
+            [
+                ("Commands", self.command_output),
+                ("FIX Messages", self.fix_output),
+            ],
+            on_change=self._on_output_tab_change,
+        )
         self.md = MarketDataPanel()
         self.md_output = urwid.LineBox(self.md, title="Market Data")
         self.inst = InstrumentPanel()
         self.inst_output = urwid.LineBox(self.inst, title="Instruments")
-        self.main_pane = urwid.Pile([self.output])
+        self.main_pane = urwid.Pile([self.output_tabs])
         self.input = CommandEdit()
         self.panes = []
 
@@ -1087,14 +1278,18 @@ class FIXInterface:
         # Define palette for styling
         self.palette = [
             ('reversed', 'standout', ''),
+            ('tab_active', 'black', 'light gray'),
+            ('tab_inactive', 'light gray', 'black'),
         ]
 
         # Create the main loop
+        self.mouse_enabled = False
+
         self.loop = urwid.MainLoop(
             urwid.Padding(self.frame, align='center', left=1, right=1),
             palette=self.palette,
             unhandled_input=self.handle_global_input,
-            handle_mouse=False
+            handle_mouse=self.mouse_enabled
         )
 
         # Start a periodic callback to check the message queue
@@ -1102,12 +1297,34 @@ class FIXInterface:
 
     def display_message(self, message):
         """
-        Append a message to the output pane.
+        Append a message to the command output pane.
         """
-        sanitized_msg = message.replace('\r', ' ').replace('\n', ' ').replace('\1', '^')
-        self.output.body.append(urwid.Text(sanitized_msg))
-        # Scroll to the bottom to show the latest message
-        self.output.set_focus(len(self.output.body) - 1)
+        self._append_to_output(self.command_output, message)
+
+    def display_fix_message(self, message):
+        """
+        Append a message to the FIX output pane.
+        """
+        self._append_to_output(self.fix_output, message)
+
+    def _append_to_output(self, listbox, message):
+        sanitized_msg = self._sanitize_message(message)
+        body = listbox.body
+        body.append(urwid.Text(sanitized_msg))
+        listbox.set_focus(len(body) - 1)
+
+    @staticmethod
+    def _sanitize_message(message):
+        sanitized = str(message)
+        return sanitized.replace('\r', ' ').replace('\n', ' ').replace('\1', '^')
+
+    @staticmethod
+    def _is_fix_message(message):
+        normalized = str(message).lstrip()
+        return normalized.startswith('<TX<') or normalized.startswith('>RX>')
+
+    def _on_output_tab_change(self, _active_tab):
+        self.frame.focus_position = 'footer'
 
     def handle_command(self, command):
         """
@@ -1124,7 +1341,7 @@ class FIXInterface:
         self.execute_command(command)
 
         # Ensure the input widget remains focused
-        self.frame.set_focus('footer')
+        self.frame.focus_position = 'footer'
 
     def execute_command(self, command):
         """
@@ -1369,6 +1586,10 @@ class FIXInterface:
         if key in ('ctrl c', 'ctrl C'):
             self.fix_app.send_logout()
             raise urwid.ExitMainLoop()
+        elif key == 'f3':
+            self.output_tabs.activate_next()
+        elif key == 'f4':
+            self.toggle_mouse_mode()
 
     def process_message_queue(self, loop, user_data):
         """
@@ -1384,7 +1605,10 @@ class FIXInterface:
 
         while not self.message_queue.empty():
             message = self.message_queue.get_nowait()
-            self.display_message(message)
+            if self._is_fix_message(message):
+                self.display_fix_message(message)
+            else:
+                self.display_message(message)
 
         # Schedule the next check
         loop.set_alarm_in(0.16, self.process_message_queue)
@@ -1394,8 +1618,24 @@ class FIXInterface:
         Run the main loop.
         """
         # Ensure input is focused at the start
-        self.frame.set_focus('footer')
+        self.frame.focus_position = 'footer'
+        self._apply_mouse_mode()
         self.loop.run()
+
+    def toggle_mouse_mode(self):
+        self.mouse_enabled = not self.mouse_enabled
+        self._apply_mouse_mode()
+        if self.mouse_enabled:
+            self.display_message(
+                "Mouse mode enabled: click tabs to switch. Press Ctrl+M to enter selection mode."
+            )
+        else:
+            self.display_message(
+                "Selection mode enabled: press Ctrl+M to re-enable mouse interaction."
+            )
+
+    def _apply_mouse_mode(self):
+        self.loop.screen.set_mouse_tracking(self.mouse_enabled)
 
 # =============================
 # FIX Session Runner
@@ -1478,4 +1718,3 @@ def main():
 # =============================
 if __name__ == "__main__":
     main()
-
