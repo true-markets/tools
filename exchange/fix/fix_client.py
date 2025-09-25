@@ -735,7 +735,7 @@ class FIXApp(fix.Application):
             message.setField(fix.Password(password))  # Set tag 554
 
             self.message_queue.put("Sending Logon message.")
-            self.message_queue.put(f"<TX< {message}")
+        self.message_queue.put(f"<TX< {message}")
 
     def fromAdmin(self, message, sessionID):
         self.message_queue.put(f">RX> {message}")
