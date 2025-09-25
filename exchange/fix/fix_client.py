@@ -36,10 +36,10 @@ def QueryRest(ctx, method, path, body = None):
         host = os.getenv("TRUEX_HOST")
         port = os.getenv("TRUEX_REST_PORT")
         url = f"http://{host}:{port}"
-    elif ctx.env.lower() == "dev":
-        url = "http://dev1.truex.co:9742"
-    elif ctx.env.lower() == "uat":
-        url = "http://uat.truex.co:9742"
+    elif ctx.env == "dev":
+        url = "http://10.10.10.11:10376"
+    elif ctx.env == "uat":
+        url = "http://10.10.20.11:9742"
     elif ctx.env == "prod":
         url = "https://prod.truex.co"
 
@@ -584,7 +584,7 @@ class FIXApp(fix.Application):
         self.message_queue = message_queue
         self.market_data_queue = market_data_queue
         self.instrument_data_queue = instrument_data_queue
-        self.sessions = {}
+        self.sessions = {"TRUEX_LCL_GW": None, "TRUEX_DEV_GW": None, "TRUEX_UAT_GW": None, "TRUEX_PROD_GW": None}
         self.app_id = app_id  # Identifier for the FIX session
         self.reset_seq_num = True
         # request ids
@@ -598,7 +598,7 @@ class FIXApp(fix.Application):
         if self.env == "uat":
            return self.sessions.get("TRUEX_UAT_OE", self.sessions["TRUEX_UAT_GW"])
         if self.env == "prod":
-           return self.sessions.get("TRUEX_PROD_OE", self.session["TRUEX_PROD_GW"])
+           return self.sessions.get("TRUEX_PROD_OE", self.sessions["TRUEX_PROD_GW"])
 
         return None
 
@@ -610,7 +610,7 @@ class FIXApp(fix.Application):
         if self.env == "uat":
            return self.sessions.get("TRUEX_UAT_MD", self.sessions["TRUEX_UAT_GW"])
         if self.env == "prod":
-           return self.sessions.get("TRUEX_PROD_MD", self.session["TRUEX_PROD_GW"])
+           return self.sessions.get("TRUEX_PROD_MD", self.sessions["TRUEX_PROD_GW"])
 
         return None
 
@@ -629,7 +629,8 @@ class FIXApp(fix.Application):
         else:
             self.message_queue.put("Logon failed!")
 
-        self.message_queue.put("Sessions: " + ", ".join(self.sessions.keys()))
+        activeSessions = [k for k, v in self.sessions.items() if v is not None]
+        self.message_queue.put(f"Active sessions: {len(activeSessions)} {activeSessions}")
 
     def onLogout(self, sessionID):
         self.message_queue.put(f"Logout: {sessionID}")
@@ -1035,6 +1036,8 @@ class FIXApp(fix.Application):
 
     def send_logout(self):
         for key, session in self.sessions.items():
+            if session is None:
+                continue
             logout = fix.Message()
             logout.getHeader().setField(fix.MsgType("5"))  # Logout message type
             try:
