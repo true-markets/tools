@@ -376,132 +376,111 @@ class OrderManager:
         # Use the graceful shutdown method for all exits
         self._graceful_shutdown()
 
-    def _graceful_shutdown(self):
+    def _graceful_shutdown(self) -> None:
         """Perform graceful shutdown with external data cleanup and retry."""
         logger.info("🛑 Beginning graceful shutdown sequence...")
 
-        # Mark as shutting down first
         self.running = False
 
         try:
-            # Step 1: Signal shutdown and disconnect providers in their own event loop
-            if (
-                hasattr(self, "external_thread")
-                and self.external_thread
-                and self.external_thread.is_alive()
-            ):
-                logger.info("📡 Initiating external data shutdown...")
-
-                if hasattr(self, "external_event_loop") and self.external_event_loop:
-                    try:
-                        import asyncio
-
-                        # Step 1: Cancel the main external data task first
-                        if (
-                            hasattr(self, "external_main_task")
-                            and self.external_main_task
-                        ):
-                            logger.info("📡 Cancelling main external data task...")
-
-                            def cancel_main_task():
-                                if (
-                                    self.external_main_task
-                                    and not self.external_main_task.cancelled()
-                                ):
-                                    self.external_main_task.cancel()
-                                    logger.info("📡 Main external data task cancelled")
-
-                            self.external_event_loop.call_soon_threadsafe(
-                                cancel_main_task
-                            )
-
-                            # Give it a moment to cancel
-                            time.sleep(0.5)
-
-                        # Step 2: Schedule the disconnect in the external event loop
-                        if (
-                            hasattr(self, "external_data_manager")
-                            and self.external_data_manager
-                        ):
-                            future = asyncio.run_coroutine_threadsafe(
-                                self.external_data_manager.disconnect_all(),
-                                self.external_event_loop,
-                            )
-                            # Give it time to complete
-                            try:
-                                future.result(timeout=5)
-                                logger.info("📡 External data providers disconnected")
-                            except Exception as e:
-                                logger.warning(
-                                    f"Provider disconnect timeout/error: {e}"
-                                )
-                    except Exception as e:
-                        logger.warning(f"Error during provider disconnect: {e}")
-
-                        # Fallback: Mark providers as disconnected manually
-                        if (
-                            hasattr(self, "external_data_manager")
-                            and self.external_data_manager
-                        ):
-                            try:
-                                for (
-                                    provider
-                                ) in self.external_data_manager.providers.values():
-                                    provider.connected = False
-                                logger.info(
-                                    "📡 Marked all providers as disconnected (fallback)"
-                                )
-                            except Exception as fallback_error:
-                                logger.warning(
-                                    f"Fallback disconnect failed: {fallback_error}"
-                                )
-
-                    try:
-                        # Step 3: Now stop the event loop
-                        self.external_event_loop.call_soon_threadsafe(
-                            self.external_event_loop.stop
-                        )
-                    except Exception as e:
-                        logger.warning(f"Error stopping external event loop: {e}")
-
-                # Wait for thread to finish
-                logger.info("📡 Waiting for external data worker thread to stop...")
-                self.external_thread.join(
-                    timeout=10
-                )  # Longer timeout for graceful shutdown
-
-                if self.external_thread.is_alive():
-                    logger.warning(
-                        "📡 External data thread did not stop gracefully within timeout"
-                    )
-                else:
-                    logger.info("📡 External data worker thread stopped")
-
-            # Step 3: Cancel all orders if configured
-            if settings.CANCEL_ORDERS_ON_EXIT:
-                logger.info("📝 Cancelling all open orders...")
-                for symbol, market in self.markets.items():
-                    try:
-                        orders = market.get_orders()
-                        if orders:
-                            logger.info(f"Cancelling {len(orders)} orders for {symbol}")
-                            market.cancel_all_orders()
-                    except Exception as e:
-                        logger.error(f"Error cancelling orders for {symbol}: {e}")
-
-            # Step 4: Close market connections
-            logger.info("🔌 Closing market connections...")
-            for symbol, market in self.markets.items():
-                try:
-                    market.exit()
-                except Exception as e:
-                    logger.error(f"Error closing connection for {symbol}: {e}")
-
-        except Exception as e:
-            logger.error(f"Error during graceful shutdown: {e}")
+            self._cancel_open_orders_on_exit()
+            self._close_market_connections()
+            self._shutdown_external_data()
+        except Exception as error:
+            logger.error(f"Error during graceful shutdown: {error}")
         finally:
             logger.info("🔚 Graceful shutdown complete")
             sys.exit(0)
+
+    def _shutdown_external_data(self) -> None:
+        """Stop external data processing thread and event loop if running."""
+        if (
+            not hasattr(self, "external_thread")
+            or not self.external_thread
+            or not self.external_thread.is_alive()
+        ):
+            return
+
+        logger.info("📡 Initiating external data shutdown...")
+
+        if getattr(self, "external_event_loop", None):
+            self._cancel_external_main_task()
+            self._disconnect_external_providers()
+            self.external_event_loop.call_soon_threadsafe(self.external_event_loop.stop)
+
+        self._wait_for_external_thread()
+
+    def _cancel_external_main_task(self) -> None:
+        """Cancel the main external data task running in the event loop."""
+        if not getattr(self, "external_main_task", None):
+            return
+
+        logger.info("📡 Cancelling main external data task...")
+
+        def cancel_main_task() -> None:
+            if self.external_main_task and not self.external_main_task.cancelled():
+                self.external_main_task.cancel()
+                logger.info("📡 Main external data task cancelled")
+
+        try:
+            self.external_event_loop.call_soon_threadsafe(cancel_main_task)
+            time.sleep(0.5)
+        except Exception as error:
+            logger.warning(f"Error cancelling main external data task: {error}")
+
+    def _disconnect_external_providers(self) -> None:
+        """Disconnect all external data providers via the event loop."""
+        if not getattr(self, "external_data_manager", None):
+            return
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self.external_data_manager.disconnect_all(),
+                self.external_event_loop,
+            )
+            try:
+                future.result(timeout=5)
+                logger.info("📡 External data providers disconnected")
+            except Exception as error:
+                logger.warning(f"Provider disconnect timeout/error: {error}")
+        except Exception as error:
+            logger.warning(f"Error during provider disconnect: {error}")
+
+    def _wait_for_external_thread(self) -> None:
+        """Wait for the external data worker thread to exit."""
+        logger.info("📡 Waiting for external data worker thread to stop...")
+        self.external_thread.join(timeout=10)
+
+        if self.external_thread.is_alive():
+            logger.warning(
+                "📡 External data thread did not stop gracefully within timeout"
+            )
+        else:
+            logger.info("📡 External data worker thread stopped")
+
+    def _cancel_open_orders_on_exit(self) -> None:
+        """Cancel outstanding orders when configured to do so."""
+        if not settings.CANCEL_ORDERS_ON_EXIT:
+            return
+
+        logger.info("📝 Cancelling all open orders...")
+        for symbol, market in self.markets.items():
+            try:
+                orders = market.get_orders()
+                if orders:
+                    logger.info(f"Cancelling {len(orders)} orders for {symbol}")
+                    market.cancel_all_orders()
+            except Exception as error:
+                logger.error(f"Error cancelling orders for {symbol}: {error}")
+
+    def _close_market_connections(self) -> None:
+        """Close all market connections gracefully."""
+        logger.info("🔌 Closing market connections...")
+        for symbol, market in self.markets.items():
+            try:
+                market.exit()
+            except Exception as error:
+                logger.error(f"Error closing connection for {symbol}: {error}")
 
     def get_ticker(self, symbol):
         # Get local ticker data (always needed as fallback)
