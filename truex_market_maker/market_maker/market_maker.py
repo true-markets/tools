@@ -1313,7 +1313,7 @@ class OrderManager:
             sells_matched += 1
 
         if len(to_amend) > 0:
-            for amended_order in reversed(to_amend):
+            for amended_order in to_amend:
                 reference_order = [
                     order
                     for order in existing_orders
@@ -1348,7 +1348,7 @@ class OrderManager:
                 logger.error("Amend failed: %s" % e)
 
         if len(to_create) > 0:
-            for order in reversed(to_create):
+            for order in to_create:
                 logger.info(
                     "Creating %4s %10s %s @ %s"
                     % (order["side"], order["symbol"], order["qty"], order["price"])

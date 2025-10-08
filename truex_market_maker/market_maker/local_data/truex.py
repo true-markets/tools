@@ -584,7 +584,7 @@ class TruexDataProvider(ExternalDataProvider):
                     self.ws_seqnum[chn] = msg["seqnum"]
                     symbol = msg["data"]["info"]["symbol"]
                     self.ws_data[chn][symbol] = msg["data"]
-                    self.symbol_map[msg["data"]["id"]] = symbol
+                    self.symbol_map[msg["data"]["info"]["symbol"]] = symbol
 
                     if self.queue_callback:
                         self.queue_callback.put(symbol)
@@ -602,11 +602,7 @@ class TruexDataProvider(ExternalDataProvider):
                 if chn not in self.ws_data:
                     self.ws_data[chn] = {}
 
-                instrument_id = msg["data"]["id"]
-                if instrument_id not in self.symbol_map:
-                    logger.error(f"Unknown instrument id: {instrument_id}")
-                    return
-                symbol = self.symbol_map[instrument_id]
+                symbol = self.symbol_map[msg["data"]["symbol"]]
 
                 if upd == "SNAPSHOT":
                     self.ws_seqnum[chn] = msg["seqnum"]
@@ -627,11 +623,7 @@ class TruexDataProvider(ExternalDataProvider):
                     self.ws_data[chn] = {}
                     self.ws_seqnum[chn] = 0
 
-                instrument_id = msg["data"]["id"]
-                if instrument_id not in self.symbol_map:
-                    logger.error(f"Unknown instrument id: {instrument_id}")
-                    return
-                symbol = self.symbol_map[instrument_id]
+                symbol = self.symbol_map[msg["data"]["symbol"]]
 
                 if msg["seqnum"] != self.ws_seqnum[chn]:
                     gap = int(msg["seqnum"]) - int(self.ws_seqnum[chn])
