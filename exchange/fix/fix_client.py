@@ -32,14 +32,16 @@ def QueryRest(ctx, method, path, body = None):
     HEADER_AUTH_TOKEN = "x-truex-auth-token"
 
     url = ""
-    if ctx.env.lower() == "local":
+    if ctx.env == "local":
         host = os.getenv("TRUEX_HOST")
         port = os.getenv("TRUEX_REST_PORT")
         url = f"http://{host}:{port}"
-    elif ctx.env.lower() == "dev":
+    elif ctx.env == "dev":
         url = "http://dev1.truex.co:9742"
-    elif ctx.env.lower() == "uat":
+    elif ctx.env == "uat":
         url = "http://uat.truex.co:9742"
+    elif ctx.env == "prod":
+        url = "https://prod.truex.co"
 
     url += path
 
@@ -294,6 +296,73 @@ class CommandEdit(urwid.Edit):
                 self.history_index = None
             return super().keypress(size, key)
 
+
+# =============================
+# TabbedPane: Simple Tab Widget
+# =============================
+class TabbedPane(urwid.WidgetWrap):
+    def __init__(self, tabs, active=None, on_change=None):
+        if not tabs:
+            raise ValueError("TabbedPane requires at least one tab.")
+
+        self._tab_order = [name for name, _ in tabs]
+        self._tab_widgets = {name: widget for name, widget in tabs}
+        self._tab_buttons = {}
+        self._on_change = on_change
+        self.active_tab = active or self._tab_order[0]
+        self._header = urwid.Columns([], dividechars=1)
+        self._body = urwid.WidgetPlaceholder(self._tab_widgets[self.active_tab])
+
+        super().__init__(urwid.Pile([('pack', self._header), self._body]))
+        self._build_header()
+
+    def _build_header(self):
+        contents = []
+        for name in self._tab_order:
+            button = urwid.Button(name)
+            urwid.connect_signal(
+                button,
+                'click',
+                self._on_tab_selected,
+                user_args=[name],
+            )
+            attr = 'tab_active' if name == self.active_tab else 'tab_inactive'
+            contents.append(
+                (
+                    urwid.AttrMap(button, attr, focus_map='reversed'),
+                    self._header.options('weight', 1),
+                )
+            )
+            self._tab_buttons[name] = button
+        self._header.contents = contents
+
+    def _on_tab_selected(self, tab_name, button):
+        if tab_name == self.active_tab:
+            return
+
+        self.activate(tab_name)
+
+    def activate(self, tab_name):
+        if tab_name not in self._tab_widgets:
+            raise ValueError(f"Unknown tab: {tab_name}")
+
+        self.active_tab = tab_name
+        self._body.original_widget = self._tab_widgets[tab_name]
+        self._build_header()
+        self._notify_tab_change()
+
+    def activate_next(self):
+        idx = self._tab_order.index(self.active_tab)
+        self.activate(self._tab_order[(idx + 1) % len(self._tab_order)])
+
+    def activate_previous(self):
+        idx = self._tab_order.index(self.active_tab)
+        self.activate(self._tab_order[(idx - 1) % len(self._tab_order)])
+
+    def _notify_tab_change(self):
+        if callable(self._on_change):
+            self._on_change(self.active_tab)
+
 # =============================
 # Custom Market Data Widget
 # =============================
@@ -321,8 +390,9 @@ class MarketDataWidget(urwid.WidgetWrap):
                 first = False
             else:
                 data_line += f"{'':<10} {bid.size:>10.6f} {bid.price:>13.6f}  x  {offer.price:<13.6f} {offer.size:<10.6f}\n"
-        # remove tailing newline
-        data_line = data_line.rstrip('\n')
+        # add last line with book mid point and spread
+        # align mid and spread to the right of the last line
+        data_line += f"{'':<10} mid: {((self.buys.head().price + self.sells.head().price) / 2):>13.6f}  |  spread: {(self.sells.head().price - self.buys.head().price):>10.6f}"
 
         # Combine the header, separator, and data row.
         return f"{header}\n{dash_line}\n{data_line}"
@@ -581,34 +651,65 @@ class FIXApp(fix.Application):
         self.message_queue = message_queue
         self.market_data_queue = market_data_queue
         self.instrument_data_queue = instrument_data_queue
-        self.sessionID = None
+        self.sessions = {"TRUEX_LCL_GW": None, "TRUEX_DEV_GW": None, "TRUEX_UAT_GW": None, "TRUEX_PROD_GW": None}
         self.app_id = app_id  # Identifier for the FIX session
         self.reset_seq_num = True
         # request ids
         self.securityReqID_ = None
 
+    def OrderEntrySession(self):
+        if self.env == "local":
+            return self.sessions.get("TRUEX_LCL_OE", self.sessions["TRUEX_LCL_GW"])
+        if self.env == "dev":
+           return self.sessions.get("TRUEX_DEV_OE", self.sessions["TRUEX_DEV_GW"])
+        if self.env == "uat":
+           return self.sessions.get("TRUEX_UAT_OE", self.sessions["TRUEX_UAT_GW"])
+        if self.env == "prod":
+           return self.sessions.get("TRUEX_PROD_OE", self.sessions["TRUEX_PROD_GW"])
+
+        return None
+
+    def MarketDataSession(self):
+        if self.env == "local":
+            return self.sessions.get("TRUEX_LCL_MD", self.sessions["TRUEX_LCL_GW"])
+        if self.env == "dev":
+           return self.sessions.get("TRUEX_DEV_MD", self.sessions["TRUEX_DEV_GW"])
+        if self.env == "uat":
+           return self.sessions.get("TRUEX_UAT_MD", self.sessions["TRUEX_UAT_GW"])
+        if self.env == "prod":
+           return self.sessions.get("TRUEX_PROD_MD", self.sessions["TRUEX_PROD_GW"])
+
+        return None
+
     def onCreate(self, sessionID):
+        self.sessions[sessionID.getTargetCompID().getValue()] = sessionID
         self.message_queue.put(f"Session created: {sessionID}")
 
     def onLogon(self, sessionID):
-        self.sessionID = sessionID
+        self.sessions[sessionID.getTargetCompID().getValue()] = sessionID
         self.clientIds = GetClientIds(self)
         self.instrumentIds = GetInstrumentIds(self)
+        for key, instrument in self.instrumentIds.items():
+            self.message_queue.put(f"Instrument: {key} Symbol: {instrument['info']['symbol']}")
         if (sessionID != None):
             self.message_queue.put(f"Logon successful: {sessionID}")
         else:
             self.message_queue.put("Logon failed!")
 
+        activeSessions = [k for k, v in self.sessions.items() if v is not None]
+        self.message_queue.put(f"Active sessions: {len(activeSessions)} {activeSessions}")
+
     def onLogout(self, sessionID):
         self.message_queue.put(f"Logout: {sessionID}")
-        self.sessionID = None
+        self.sessions.pop(sessionID.getTargetCompID().getValue(), None)
 
     def toAdmin(self, message, sessionID):
+         # Determine the message type
         msg_type = fix.MsgType()
         message.getHeader().getField(msg_type)
         # Check if the message is a Logon message
         if msg_type.getValue() == fix.MsgType_Logon:
-            self.sessionId = None
+            self.message_queue.put(f"Preparing to send admin message {sessionID.toString()}")
 
             # Set ResetSeqNum
             if self.reset_seq_num:
@@ -621,7 +722,7 @@ class FIXApp(fix.Application):
             msg_seq_num = 1 if self.reset_seq_num else message.getHeader().getField(fix.MsgSeqNum()).getString()  # MsgSeqNum (34)
             sender_comp_id = message.getHeader().getField(fix.SenderCompID()).getString()  # SenderCompID (49)
             target_comp_id = message.getHeader().getField(fix.TargetCompID()).getString()  # TargetCompID (56)
-
+            self.message_queue.put(f"sending_time: {sending_time}, msg_type: {msg_type}, msg_seq_num: {msg_seq_num}, sender_comp_id: {sender_comp_id}, target_comp_id: {target_comp_id}")
             # Generate the HMAC-SHA-256 signature for the password
             password = GeneratePassword(self.apiKeySecret, sending_time, msg_type, msg_seq_num, sender_comp_id, target_comp_id, self.apiKeyId)
 
@@ -638,8 +739,6 @@ class FIXApp(fix.Application):
         self.message_queue.put(f"<TX< {message}")
 
     def fromAdmin(self, message, sessionID):
-        msg_type = fix.MsgType()
-        message.getHeader().getField(msg_type)
         self.message_queue.put(f">RX> {message}")
 
     def fromApp(self, message, sessionID):
@@ -661,14 +760,132 @@ class FIXApp(fix.Application):
         """
         Handle application-level messages about to be sent to the counterparty.
         """
-        # For this example, we'll just log the message about to be sent
         self.message_queue.put(f"<TX< {message}")
         # optionally can throw DoNotSend if message should not
         # be sent to the  counterparty
 
     def onExecutionReport(self, message):
         exec_type = fix.ExecType()
-        message.getField(exec_type)
+        try:
+            message.getField(exec_type)
+        except fix.FieldNotFound:
+            self.message_queue.put("Execution report received without ExecType.")
+            return
+
+        exec_type_value = exec_type.getValue()
+
+        def safe_get(field_cls):
+            field = field_cls()
+            try:
+                message.getField(field)
+                return field.getValue()
+            except fix.FieldNotFound:
+                return None
+
+        cl_ord_id = safe_get(fix.ClOrdID)
+        symbol = safe_get(fix.Symbol)
+        side_value = safe_get(fix.Side)
+        ord_status_value = safe_get(fix.OrdStatus)
+        leaves_qty = safe_get(fix.LeavesQty)
+        cum_qty = safe_get(fix.CumQty)
+        avg_px = safe_get(fix.AvgPx)
+        last_qty = safe_get(fix.LastQty)
+        last_px = safe_get(fix.LastPx)
+        text = safe_get(fix.Text)
+        ord_rej_reason = safe_get(fix.OrdRejReason)
+
+        side_map = {
+            str(fix.Side_BUY): "BUY",
+            str(fix.Side_SELL): "SELL",
+        }
+        side_label = side_map.get(str(side_value)) if side_value is not None else None
+
+        ord_status_map = {
+            str(fix.OrdStatus_NEW): "NEW",
+            str(fix.OrdStatus_PARTIALLY_FILLED): "PARTIALLY_FILLED",
+            str(fix.OrdStatus_FILLED): "FILLED",
+            str(fix.OrdStatus_CANCELED): "CANCELED",
+            str(fix.OrdStatus_PENDING_CANCEL): "PENDING_CANCEL",
+            str(fix.OrdStatus_PENDING_NEW): "PENDING_NEW",
+            str(fix.OrdStatus_PENDING_REPLACE): "PENDING_REPLACE",
+            str(fix.OrdStatus_REJECTED): "REJECTED",
+            str(fix.OrdStatus_DONE_FOR_DAY): "DONE_FOR_DAY",
+            str(fix.OrdStatus_REPLACED): "REPLACED",
+            str(fix.OrdStatus_EXPIRED): "EXPIRED",
+        }
+        ord_status_label = (
+            ord_status_map.get(str(ord_status_value))
+            if ord_status_value is not None
+            else None
+        )
+
+        statuses = []
+        extras = []
+
+        trade_like_exec_types = {
+            fix.ExecType_PARTIAL_FILL,
+            fix.ExecType_FILL,
+        }
+        exec_type_trade = getattr(fix, "ExecType_TRADE", None)
+        if exec_type_trade:
+            trade_like_exec_types.add(exec_type_trade)
+
+        trade_metrics = []
+
+        def append_metric(label, value, target):
+            if value is None:
+                return
+            target.append(f"{label}={value}")
+
+        quantity_metrics = []
+        append_metric("LeavesQty", leaves_qty, quantity_metrics)
+        append_metric("CumQty", cum_qty, quantity_metrics)
+        append_metric("AvgPx", avg_px, quantity_metrics)
+
+        if exec_type_value == fix.ExecType_REJECTED:
+            if text:
+                extras.append(f"Reason={text}")
+            if ord_rej_reason is not None:
+                extras.append(f"RejCode={ord_rej_reason}")
+        elif exec_type_value == fix.ExecType_PARTIAL_FILL:
+            append_metric("LastQty", last_qty, trade_metrics)
+            append_metric("LastPx", last_px, trade_metrics)
+        elif exec_type_value == fix.ExecType_FILL:
+            append_metric("LastQty", last_qty, trade_metrics)
+            append_metric("LastPx", last_px, trade_metrics)
+        elif exec_type_trade and exec_type_value == exec_type_trade:
+            append_metric("LastQty", last_qty, trade_metrics)
+            append_metric("LastPx", last_px, trade_metrics)
+
+        if ord_status_label:
+            statuses.append(f"OrdStatus={ord_status_label}")
+
+        context_parts = []
+        for label, value in (
+            ("ClOrdID", cl_ord_id),
+            ("Symbol", symbol),
+            ("Side", side_label),
+        ):
+            if value is not None:
+                context_parts.append(f"{label}={value}")
+
+        if exec_type_value in trade_like_exec_types:
+            trade_metrics.extend(quantity_metrics)
+        else:
+            trade_metrics = quantity_metrics + trade_metrics
+
+        detail_sections = []
+        if statuses:
+            detail_sections.append(" ".join(statuses))
+        if context_parts:
+            detail_sections.append(" ".join(context_parts))
+        if trade_metrics:
+            detail_sections.append(" ".join(trade_metrics))
+        if extras:
+            detail_sections.append(" ".join(extras))
+
+        if len(detail_sections) > 0:
+            self.message_queue.put(" ".join(detail_sections))
 
     def onMarketDataSnapshotFullRefresh(self, message):
         symbol = fix.Symbol()
@@ -849,7 +1066,7 @@ class FIXApp(fix.Application):
     #staticmethod
     def ensure_session_id(method):
         def wrapper(self, *args, **kwargs):
-            if not self.sessionID:
+            if len(self.sessions.keys()) <= 0:
                 self.message_queue.put("No active FIX session.")
                 return
             return method(self, *args, **kwargs)
@@ -887,7 +1104,7 @@ class FIXApp(fix.Application):
         message.addGroup(party_group)
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.OrderEntrySession())
             side_str = "BUY" if side == fix.Side_BUY else "SELL"
             self.message_queue.put(f"Order sent: Symbol={symbol} Side={side_str} Price={price} Size={size} Client ID={client_id}")
         except fix.SessionNotFound:
@@ -912,7 +1129,7 @@ class FIXApp(fix.Application):
         message.addGroup(party_group)
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.OrderEntrySession())
             self.message_queue.put(f"Modify sent: OrigClOrdId={orig_cl_ord_id}")
         except fix.SessionNotFound:
             self.message_queue.put("Failed to send order: FIX session not found.")
@@ -930,7 +1147,7 @@ class FIXApp(fix.Application):
         message.addGroup(party_group)
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.OrderEntrySession())
             self.message_queue.put(f"Cancel sent: OrigClOrdId={orig_cl_ord_id}")
         except fix.SessionNotFound:
             self.message_queue.put("Failed to send order: FIX session not found.")
@@ -950,7 +1167,7 @@ class FIXApp(fix.Application):
         message.addGroup(related_sym)
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.MarketDataSession());
             self.message_queue.put(f"Subscribed to market data: {symbol}")
         except fix.SessionNotFound:
             self.message_queue.put("Failed to subscribe to market data: FIX session not found.")
@@ -967,7 +1184,7 @@ class FIXApp(fix.Application):
         message.setField(fix.MarketDepth(0))
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.MarketDataSession());
             self.message_queue.put(f"Unsubscribed from market data: {md_req_id}")
             if not symbol is None:
                 self.market_data_queue.put((symbol, "UNSUB", "", 0, 0))
@@ -995,17 +1212,19 @@ class FIXApp(fix.Application):
             message.setField(fix.SubscriptionRequestType(fix.SubscriptionRequestType_DISABLE_PREVIOUS_SNAPSHOT_PLUS_UPDATE_REQUEST))
 
         try:
-            fix.Session.sendToTarget(message, self.sessionID)
+            fix.Session.sendToTarget(message, self.MarketDataSession());
             self.message_queue.put(f"Security List Request sent: {request} {symbol if symbol else 'ALL'}")
         except fix.SessionNotFound:
             self.message_queue.put("Failed to send Security List Request: FIX session not found.")
 
     def send_logout(self):
-        if self.sessionID:
+        for key, session in self.sessions.items():
+            if session is None:
+                continue
             logout = fix.Message()
             logout.getHeader().setField(fix.MsgType("5"))  # Logout message type
             try:
-                fix.Session.sendToTarget(logout, self.sessionID)
+                fix.Session.sendToTarget(logout, session)
                 self.message_queue.put("Logout message sent.")
             except fix.SessionNotFound:
                 self.message_queue.put("Failed to send logout: FIX session not found.")
@@ -1029,12 +1248,20 @@ class FIXInterface:
 
         # Create widgets
         self.header = urwid.Text("FIX Trading Tool - Interactive CLI", align='center')
-        self.output = urwid.ListBox(urwid.SimpleFocusListWalker([]))
+        self.command_output = urwid.ListBox(urwid.SimpleFocusListWalker([]))
+        self.fix_output = urwid.ListBox(urwid.SimpleFocusListWalker([]))
+        self.output_tabs = TabbedPane(
+            [
+                ("Commands", self.command_output),
+                ("FIX Messages", self.fix_output),
+            ],
+            on_change=self._on_output_tab_change,
+        )
         self.md = MarketDataPanel()
         self.md_output = urwid.LineBox(self.md, title="Market Data")
         self.inst = InstrumentPanel()
         self.inst_output = urwid.LineBox(self.inst, title="Instruments")
-        self.main_pane = urwid.Pile([self.output])
+        self.main_pane = urwid.Pile([self.output_tabs])
         self.input = CommandEdit()
         self.panes = []
 
@@ -1054,14 +1281,18 @@ class FIXInterface:
         # Define palette for styling
         self.palette = [
             ('reversed', 'standout', ''),
+            ('tab_active', 'black', 'light gray'),
+            ('tab_inactive', 'light gray', 'black'),
         ]
 
         # Create the main loop
+        self.mouse_enabled = False
+
         self.loop = urwid.MainLoop(
             urwid.Padding(self.frame, align='center', left=1, right=1),
             palette=self.palette,
             unhandled_input=self.handle_global_input,
-            handle_mouse=False
+            handle_mouse=self.mouse_enabled
         )
 
         # Start a periodic callback to check the message queue
@@ -1069,12 +1300,34 @@ class FIXInterface:
 
     def display_message(self, message):
         """
-        Append a message to the output pane.
+        Append a message to the command output pane.
         """
-        sanitized_msg = message.replace('\r', ' ').replace('\n', ' ').replace('\1', '^')
-        self.output.body.append(urwid.Text(sanitized_msg))
-        # Scroll to the bottom to show the latest message
-        self.output.set_focus(len(self.output.body) - 1)
+        self._append_to_output(self.command_output, message)
+
+    def display_fix_message(self, message):
+        """
+        Append a message to the FIX output pane.
+        """
+        self._append_to_output(self.fix_output, message)
+
+    def _append_to_output(self, listbox, message):
+        sanitized_msg = self._sanitize_message(message)
+        body = listbox.body
+        body.append(urwid.Text(sanitized_msg))
+        listbox.set_focus(len(body) - 1)
+
+    @staticmethod
+    def _sanitize_message(message):
+        sanitized = str(message)
+        return sanitized.replace('\r', ' ').replace('\n', ' ').replace('\1', '^')
+
+    @staticmethod
+    def _is_fix_message(message):
+        normalized = str(message).lstrip()
+        return normalized.startswith('<TX<') or normalized.startswith('>RX>')
+
+    def _on_output_tab_change(self, _active_tab):
+        self.frame.focus_position = 'footer'
 
     def handle_command(self, command):
         """
@@ -1091,7 +1344,7 @@ class FIXInterface:
         self.execute_command(command)
 
         # Ensure the input widget remains focused
-        self.frame.set_focus('footer')
+        self.frame.focus_position = 'footer'
 
     def execute_command(self, command):
         """
@@ -1336,6 +1589,10 @@ class FIXInterface:
         if key in ('ctrl c', 'ctrl C'):
             self.fix_app.send_logout()
             raise urwid.ExitMainLoop()
+        elif key == 'f3':
+            self.output_tabs.activate_next()
+        elif key == 'f4':
+            self.toggle_mouse_mode()
 
     def process_message_queue(self, loop, user_data):
         """
@@ -1351,7 +1608,10 @@ class FIXInterface:
 
         while not self.message_queue.empty():
             message = self.message_queue.get_nowait()
-            self.display_message(message)
+            if self._is_fix_message(message):
+                self.display_fix_message(message)
+            else:
+                self.display_message(message)
 
         # Schedule the next check
         loop.set_alarm_in(0.16, self.process_message_queue)
@@ -1361,8 +1621,24 @@ class FIXInterface:
         Run the main loop.
         """
         # Ensure input is focused at the start
-        self.frame.set_focus('footer')
+        self.frame.focus_position = 'footer'
+        self._apply_mouse_mode()
         self.loop.run()
+
+    def toggle_mouse_mode(self):
+        self.mouse_enabled = not self.mouse_enabled
+        self._apply_mouse_mode()
+        if self.mouse_enabled:
+            self.display_message(
+                "Mouse mode enabled: click tabs to switch. Press Ctrl+M to enter selection mode."
+            )
+        else:
+            self.display_message(
+                "Selection mode enabled: press Ctrl+M to re-enable mouse interaction."
+            )
+
+    def _apply_mouse_mode(self):
+        self.loop.screen.set_mouse_tracking(self.mouse_enabled)
 
 # =============================
 # FIX Session Runner
@@ -1423,7 +1699,7 @@ def main():
 
     # Initialize the FIX application
     fix_app = FIXApp(message_queue, market_data_queue, instrument_data_queue, app_id="FIX_Client")
-    fix_app.env = env
+    fix_app.env = env.lower()
     # Grab key ID and secret from env vars
     fix_app.apiKeyId = os.getenv("TRUEX_KEY_ID")
     fix_app.apiKeySecret = os.getenv("TRUEX_KEY_SECRET")
@@ -1445,4 +1721,3 @@ def main():
 # =============================
 if __name__ == "__main__":
     main()
-
