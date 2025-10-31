@@ -296,7 +296,6 @@ async def run(
                         try:
                             # Parse the JSON message
                             message = json.loads(raw)
-                            print(message)
                             channel = message.get("channel")
 
                             # Handle DEPTH channel messages
