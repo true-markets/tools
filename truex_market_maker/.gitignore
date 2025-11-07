@@ -9,3 +9,6 @@ __pycache__/
 .venv/
 env/
 venv/
+setup_env.sh
+setup_dev.sh
+setup_uat.sh

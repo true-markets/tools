@@ -1,5 +1,5 @@
 # Constants
-VERSION="0.0.1"
+VERSION = "0.0.1"
 QUOTE_TICK_BREAKPOINTS = {
     0.01: 0.0001,
     0.30: 0.001,

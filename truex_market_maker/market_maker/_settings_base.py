@@ -1,29 +1,29 @@
+import logging
 from os import environ
 from os.path import join
-import logging
 
 ########################################################################################################################
 # Connection/Auth
 ########################################################################################################################
 
 # API URL.
-HOST = environ['TRUEX_HOST']
-REST_PORT = environ['TRUEX_REST_PORT']
+HOST = environ["TRUEX_HOST"]
+REST_PORT = environ["TRUEX_REST_PORT"]
 BASE_REST_URL = f"http://{HOST}:{REST_PORT}/api/v1"
-WS_PORT = environ['TRUEX_WS_PORT']
-BASE_WS_URL = f"ws://{HOST}:{WS_PORT}"
+WS_PORT = environ["TRUEX_WS_PORT"]
+BASE_WS_URL = f"ws://{HOST}:{WS_PORT}/v1/api"
 
 # The TrueX API requires permanent API keys.
-API_KEY = environ['TRUEX_API_KEY']
-API_SECRET = environ['TRUEX_SECRET_KEY']
-API_USER = environ['TRUEX_USER']
+API_KEY = environ["TRUEX_API_KEY"]
+API_SECRET = environ["TRUEX_SECRET_KEY"]
+API_USER = environ["TRUEX_USER"]
 
 ########################################################################################################################
 # Target
 ########################################################################################################################
 
 # Instruments to market make on TrueX.
-SYMBOLS = ["ETH-PYUSD", "BTC-PYUSD"]
+SYMBOLS = ["BTC-PYUSD"]
 
 ########################################################################################################################
 # TICK SIZE
@@ -66,7 +66,7 @@ MAINTAIN_SPREADS = True
 # it will be resubmitted.
 #
 # 0.01 == 1%
-RELIST_INTERVAL = 0.01
+RELIST_INTERVAL = 0.00001
 
 ########################################################################################################################
 # Trading Behavior
@@ -86,7 +86,9 @@ POST_ONLY = False
 
 # If true, cancel any open orders from previous runs first
 CANCEL_ORDERS_ON_START = False
-# If True, cancel all open orders on exit
+
+# If True, cancel all open orders on exit (RECOMMENDED!)
+# This ensures you don't leave orders hanging when the bot stops
 CANCEL_ORDERS_ON_EXIT = True
 
 ########################################################################################################################
@@ -123,12 +125,143 @@ LOG_LEVEL = logging.INFO
 ORDERID_PREFIX = "mm-trx-"
 
 # If any of these files (and this file) changes, reload the bot.
-WATCHED_FILES = [join('market_maker', 'market_maker.py'), join('market_maker', 'truex.py'), join('market_maker', 'settings.py')]
+WATCHED_FILES = [
+    join("market_maker", "settings.py"),
+]
 
+########################################################################################################################
+# External Market Data
+########################################################################################################################
+
+# Enable external market data integration
+USE_EXTERNAL_DATA = True
+
+# Automatically start external data collection when using enhanced mode
+AUTO_START_ENHANCED = True
+
+# External data providers to use
+EXTERNAL_DATA_PROVIDERS = {
+    "coinbase_rest": {
+        "enabled": True,
+        "type": "coinbase_rest",
+        "poll_interval": 10,  # seconds
+    },
+    "coinbase_ws": {
+        "enabled": False,  # Websocket provider - more complex setup
+        "type": "coinbase_ws",
+    },
+}
+
+# Symbol mapping for external providers
+# Maps local symbols to external symbols
+EXTERNAL_SYMBOL_MAPPING = {
+    "BTC-PYUSD": {
+        "coinbase": "BTC-USD",  # PYUSD not widely available, use USD as proxy
+    },
+    "ETH-PYUSD": {
+        "coinbase": "ETH-USD",  # PYUSD not widely available, use USD as proxy
+    },
+}
+
+########################################################################################################################
+# Pricing Models
+########################################################################################################################
+
+# Default pricing model if none specified
+DEFAULT_PRICING_MODEL = "local_aware"
+
+# Available pricing models and their configurations
+PRICING_MODELS = {
+    "simple_spread": {
+        "enabled": True,
+        "priority": 100,  # Lower number = higher priority
+        "config": {"spread_bps": 50, "reference_provider": "coinbase_rest"},
+    },
+    "consensus": {
+        "enabled": True,
+        "priority": 80,
+        "config": {
+            "min_providers": 2,
+            "outlier_threshold": 0.02,
+            "base_spread_bps": 30,
+        },
+    },
+    "local_aware": {
+        "enabled": True,
+        "priority": 60,
+        "config": {"external_weight": 0.7, "local_weight": 0.3, "base_spread_bps": 40},
+    },
+    "momentum": {
+        "enabled": True,
+        "priority": 90,
+        "config": {
+            "lookback_minutes": 15,
+            "momentum_factor": 0.1,
+            "base_spread_bps": 20,
+        },
+    },
+    "external": {
+        "enabled": True,
+        "priority": 10,
+        "config": {"external_provider": "coinbase_rest"},
+    },
+}
+
+# Pricing model selection strategy
+# 'best_confidence': Use model with highest confidence
+# 'preferred': Use highest priority model that has sufficient data
+PRICING_SELECTION_STRATEGY = "best_confidence"
+
+# Minimum confidence required to use external pricing
+MIN_PRICING_CONFIDENCE = (
+    0.05  # Very low threshold for high reactivity to external pricing
+)
+
+# Fallback to local pricing if external fails
+FALLBACK_TO_LOCAL_PRICING = True
+
+# Maximum deviation from local price allowed (as percentage)
+# If external price deviates more than this from local, fall back to local
+MAX_EXTERNAL_DEVIATION = 0.05  # increased for better external price adoption
+
+# Bootstrap settings for handling market inconsistencies
+BOOTSTRAP_SPREAD_BUFFER = 0.001  # 0.1% buffer when bootstrapping from external data
+STARTUP_GRACE_PERIOD = 60  # Seconds to be tolerant of market inconsistencies on startup
+MAX_SANITY_FAILURES = 3  # Maximum sanity check failures before shutdown
+
+# Minimum external data age tolerance (seconds)
+# External data older than this will be considered stale and local data will be used instead
+MAX_EXTERNAL_DATA_AGE = 30
+
+# External data quality requirements for external-first mode
+EXTERNAL_DATA_MIN_PROVIDERS = 1  # Minimum number of external providers required
+EXTERNAL_DATA_MAX_SPREAD_PCT = (
+    2.0  # Maximum spread % to consider external data valid (e.g., 2.0 = 2%)
+)
+EXTERNAL_DATA_STARTUP_WAIT = (
+    10  # Maximum seconds to wait for external data during startup
+)
+
+########################################################################################################################
+# Order Adjustment Configuration
+########################################################################################################################
+
+# How often to check for order adjustments (seconds)
+ORDER_ADJUSTMENT_INTERVAL = 3  # More frequent checks for better reactivity
+
+# Price movement threshold for order adjustments
+PRICE_MOVE_THRESHOLD = 0.00002  # more reactive to smaller price moves
+PRICE_MOVE_TOLERANCE = 0.0001  # more reactive to smaller price moves
+
+# Maximum age for orders before considering cancellation (seconds)
+MAX_ORDER_AGE_SECONDS = 300  # 5 minutes
+
+# Cooldown period between order adjustments for the same symbol (seconds)
+ORDER_ADJUSTMENT_COOLDOWN = 15  # Shorter cooldown for more frequent adjustments
 
 ########################################################################################################################
 # TrueX Portfolio
 ########################################################################################################################
 
 # Specify the ticker that you hold. These will be used in portfolio calculations.
-CONTRACTS = ['BTC-PYUSD']
+CONTRACTS = ["BTC-PYUSD"]

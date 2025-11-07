@@ -1,0 +1,11 @@
+# Additional requirements for external market data integration
+aiohttp>=3.8.0
+websockets>=10.0
+asyncio>=3.4.3
+
+# Optional: For more advanced data analysis
+numpy>=1.21.0
+pandas>=1.3.0
+
+# For improved JSON handling
+orjson>=3.8.0
