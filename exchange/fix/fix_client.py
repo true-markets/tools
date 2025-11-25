@@ -1465,7 +1465,7 @@ class FIXInterface:
                                 return
                             client_id = self.fix_app.clientIds[client_index]
                             side_enum = fix.Side_BUY if cmd == "buy" else fix.Side_SELL
-                            self.fix_app.send_order(symbol, side_enum, order_type, exect_inst, tif, price, size, client_id)
+                            self.fix_app.send_order(symbol, side_enum, order_type, exec_inst, tif, price, size, client_id)
                             price += (price_increment * price_step)
                             price = round(price, price_digits)
                     else:
@@ -1537,6 +1537,9 @@ class FIXInterface:
                     depth = 5
                 # Send a subscription request
                 self.fix_app.subscribe_to_market_data(md_req_id, symbol, depth)
+                if not "md" in self.panes:
+                    self.panes.insert(0, "md")
+                    self.main_pane.contents.insert(0, (self.md_output, ('pack', None)))
         elif cmd == "unsubscribe":
             if len(parts) < 2 or len(parts) > 3:
                 self.display_message("Usage: unsubscribe <md_req_id> [symbol]")
