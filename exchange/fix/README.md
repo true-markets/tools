@@ -70,6 +70,15 @@ python fix_client.py --env ENV
 
 Replace `ENV` with the environment you want to run the client in (`dev`, `uat`, or `prod`).
 
+### Listen to the Drop Copy Stream
+The repository also contains `dropcopy_client.py`, a lightweight program focused on order-state drop copy updates. It connects via the same FIX configuration files, makes a REST call to discover the API user's client IDs, sends a `35=AD` request (including those IDs), and renders the latest `35=8` execution reports per order on the console.
+
+```
+python dropcopy_client.py --env dev
+```
+
+Set `TRUEX_KEY_ID` and `TRUEX_KEY_SECRET` before running so the script can authenticate during FIX logon.
+
 ### Available Commands
 Interact with the script using the following commands in the CLI:
 
@@ -160,4 +169,3 @@ Interact with the script using the following commands in the CLI:
 ## License
 
 This script is provided "as-is" for educational and testing purposes. Ensure compliance with FIX protocol standards and trading regulations when using this tool.
-

@@ -658,9 +658,7 @@ class FIXApp(fix.Application):
         self.securityReqID_ = None
 
     def OrderEntrySession(self):
-        if self.env == "local":
-            return self.sessions.get("TRUEX_LCL_OE", self.sessions["TRUEX_LCL_GW"])
-        if self.env == "dev":
+        if self.env == "local" or self.env == "dev":
            return self.sessions.get("TRUEX_DEV_OE", self.sessions["TRUEX_DEV_GW"])
         if self.env == "uat":
            return self.sessions.get("TRUEX_UAT_OE", self.sessions["TRUEX_UAT_GW"])
@@ -670,9 +668,7 @@ class FIXApp(fix.Application):
         return None
 
     def MarketDataSession(self):
-        if self.env == "local":
-            return self.sessions.get("TRUEX_LCL_MD", self.sessions["TRUEX_LCL_GW"])
-        if self.env == "dev":
+        if self.env == "local" or self.env == "dev":
            return self.sessions.get("TRUEX_DEV_MD", self.sessions["TRUEX_DEV_GW"])
         if self.env == "uat":
            return self.sessions.get("TRUEX_UAT_MD", self.sessions["TRUEX_UAT_GW"])
@@ -1077,7 +1073,7 @@ class FIXApp(fix.Application):
         GetOrders(self)
 
     @ensure_session_id
-    def send_order(self, symbol, side, order_type, tif, price, size, client_id):
+    def send_order(self, symbol, side, order_type, exec_inst, tif, price, size, client_id):
         message = fix50sp2.NewOrderSingle()
         message.setField(fix.ClOrdID(str(uuid.uuid4())))
         message.setField(fix.Symbol(symbol))
@@ -1092,6 +1088,10 @@ class FIXApp(fix.Application):
         else:
             message.setField(fix.TimeInForce(fix.TimeInForce_GOOD_TILL_CANCEL))
 
+        if exec_inst == "AON":
+            message.setField(fix.ExecInst("G"))
+        elif exec_inst == "ALO":
+            message.setField(fix.ExecInst("6"))
 
         message.setField(fix.Side(side))
         message.setField(fix.Price(price))
@@ -1428,7 +1428,13 @@ class FIXInterface:
             else:
                 try:
                     symbol = parts[1].upper()
-                    order_type = parts[2].upper()  # Order type (MARKET or LIMIT)
+                    exec_inst = None
+                    if ":" in parts[2]:
+                        order_type_data = parts[2].split(":")
+                        order_type = order_type_data[0].upper()
+                        exec_inst = order_type_data[1].upper()
+                    else:
+                        order_type = parts[2].upper()  # Order type (MARKET or LIMIT)
                     tif = parts[3].upper()  # Time in force (GTC, IOC, FOK, etc.)
                     # allow for price to be a range via double dot notation,
                     # i.e 100..105 will generate 6 orders 100, 101, 102, 103, 104, 105
@@ -1459,7 +1465,7 @@ class FIXInterface:
                                 return
                             client_id = self.fix_app.clientIds[client_index]
                             side_enum = fix.Side_BUY if cmd == "buy" else fix.Side_SELL
-                            self.fix_app.send_order(symbol, side_enum, order_type, tif, price, size, client_id)
+                            self.fix_app.send_order(symbol, side_enum, order_type, exec_inst, tif, price, size, client_id)
                             price += (price_increment * price_step)
                             price = round(price, price_digits)
                     else:
@@ -1474,7 +1480,7 @@ class FIXInterface:
                         client_id = self.fix_app.clientIds[client_index]
                         side_enum = fix.Side_BUY if cmd == "buy" else fix.Side_SELL
 
-                        self.fix_app.send_order(symbol, side_enum, order_type, tif, price, size, client_id)
+                        self.fix_app.send_order(symbol, side_enum, order_type, exec_inst, tif, price, size, client_id)
                 except ValueError:
                     self.display_message("Invalid parameters. Usage: buy|sell <symbol> <type> <tif> <price> <size> [client_index]")
         elif cmd == "modify":
@@ -1524,13 +1530,16 @@ class FIXInterface:
                 self.display_message("Usage: subscribe <md_req_id> <symbol> <depth>")
             else:
                 md_req_id = parts[1]
-                symbol = parts[2]
+                symbol = parts[2].upper()
                 if len(parts) == 4:
                     depth = int(parts[3])
                 else:
                     depth = 5
                 # Send a subscription request
                 self.fix_app.subscribe_to_market_data(md_req_id, symbol, depth)
+                if not "md" in self.panes:
+                    self.panes.insert(0, "md")
+                    self.main_pane.contents.insert(0, (self.md_output, ('pack', None)))
         elif cmd == "unsubscribe":
             if len(parts) < 2 or len(parts) > 3:
                 self.display_message("Usage: unsubscribe <md_req_id> [symbol]")
@@ -1539,7 +1548,7 @@ class FIXInterface:
 
                 md_req_id = parts[1]
                 if len(parts) == 3:
-                    symbol = parts[2]
+                    symbol = parts[2].upper()
                 # Send an unsubscription request
                 self.fix_app.unsubscribe_from_market_data(md_req_id, symbol)
         elif cmd == "logout":
