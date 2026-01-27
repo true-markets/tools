@@ -309,6 +309,7 @@ class DropCopyApp(fix.Application):
         env: str,
         client_ids: Tuple[str, ...],
         reset_seq_num: bool = True,
+        request_mass_status: bool = False,
     ):
         super().__init__()
         self.event_queue = event_queue
@@ -317,7 +318,9 @@ class DropCopyApp(fix.Application):
         self.env = env
         self.client_ids = client_ids
         self.reset_seq_num = reset_seq_num
+        self.request_mass_status = request_mass_status
         self.sessions: Dict[str, fix.SessionID] = {}
+        self._mass_status_requested = False
 
     def onCreate(self, session_id: fix.SessionID) -> None:
         self.sessions[session_id.toString()] = session_id
@@ -348,12 +351,18 @@ class DropCopyApp(fix.Application):
     def fromApp(self, message: fix.Message, session_id: fix.SessionID) -> None:
         msg_type = fix.MsgType()
         message.getHeader().getField(msg_type)
-        if msg_type.getValue() == fix.MsgType_ExecutionReport:
+        msg_type_value = msg_type.getValue()
+
+        if msg_type_value == fix.MsgType_ExecutionReport:
             snapshot = self._snapshot_from_execution_report(message)
             if snapshot:
                 self.event_queue.put(("state", snapshot))
+        elif msg_type_value == fix.MsgType_TradeCaptureReportRequestAck:
+            self._handle_trade_capture_ack(message, session_id)
+        elif msg_type_value == fix.MsgType_BusinessMessageReject:
+            self._handle_business_reject(message)
         else:
-            self._log(f"Unhandled message {msg_type.getValue()} from {session_id}")
+            self._log(f"Unhandled message {msg_type_value} from {session_id}")
         self._log(f">RX> {message}")
 
     def _prepare_logon(self, message: fix.Message) -> None:
@@ -408,6 +417,82 @@ class DropCopyApp(fix.Application):
             )
         except Exception as exc:  # noqa: BLE001
             self._log(f"Failed to send drop copy request: {exc}")
+
+    def _handle_trade_capture_ack(
+        self, message: fix.Message, session_id: fix.SessionID
+    ) -> None:
+        """Handle TradeCaptureReportRequestAck (35=AQ) and send mass status if requested."""
+        trade_request_result = fix.TradeRequestResult()
+        trade_request_status = fix.TradeRequestStatus()
+        text_field = fix.Text()
+
+        try:
+            message.getField(trade_request_result)
+            message.getField(trade_request_status)
+        except fix.FieldNotFound:
+            self._log("TradeCaptureReportRequestAck missing required fields")
+            return
+
+        result = trade_request_result.getValue()
+        status = trade_request_status.getValue()
+
+        try:
+            message.getField(text_field)
+            text = text_field.getValue()
+        except fix.FieldNotFound:
+            text = ""
+
+        if result == 0 and status == 0:
+            self._log(f"Drop copy subscription accepted: {text}")
+            if self.request_mass_status and not self._mass_status_requested:
+                self._send_mass_order_status_request(session_id)
+        else:
+            self._log(f"Drop copy subscription failed: result={result} status={status} {text}")
+
+    def _handle_business_reject(self, message: fix.Message) -> None:
+        """Handle BusinessMessageReject (35=j)."""
+        text_field = fix.Text()
+        ref_msg_type = fix.RefMsgType()
+
+        try:
+            message.getField(text_field)
+            text = text_field.getValue()
+        except fix.FieldNotFound:
+            text = "(no text)"
+
+        try:
+            message.getField(ref_msg_type)
+            ref_type = ref_msg_type.getValue()
+        except fix.FieldNotFound:
+            ref_type = "?"
+
+        self._log(f"BusinessReject for MsgType={ref_type}: {text}")
+
+    def _send_mass_order_status_request(self, session_id: fix.SessionID) -> None:
+        """Send OrderMassStatusRequest (35=BG) to get current status of all active orders."""
+        request = fix.Message()
+        header = request.getHeader()
+        header.setField(fix.MsgType(fix.MsgType_OrderMassStatusRequest))
+
+        mass_status_req_id = str(uuid.uuid4())
+        request.setField(fix.MassStatusReqID(mass_status_req_id))
+        request.setField(fix.MassStatusReqType(7))  # 7 = Status for all orders
+
+        group = fix.Group(453, 448)  # NoPartyIDs group
+        for client_id in self.client_ids:
+            group.setField(fix.PartyID(client_id))
+            group.setField(fix.PartyRole(fix.PartyRole_CLIENT_ID))
+            request.addGroup(group)
+
+        try:
+            fix.Session.sendToTarget(request, session_id)
+            self._mass_status_requested = True
+            self._log(
+                f"Sent OrderMassStatusRequest (35=BG) MassStatusReqID="
+                f"{mass_status_req_id} Clients={len(self.client_ids)}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"Failed to send mass order status request: {exc}")
 
     def _snapshot_from_execution_report(
         self, message: fix.Message
@@ -530,6 +615,7 @@ class DropCopyApp(fix.Application):
             str(fix.ExecType_PENDING_REPLACE): "PEND_REPL",
             str(fix.ExecType_DONE_FOR_DAY): "DONE_DAY",
             str(fix.ExecType_EXPIRED): "EXPIRED",
+            str(fix.ExecType_ORDER_STATUS): "ORD_STATUS",
         }
         return mapping.get(value) if value is not None else None
 
@@ -591,6 +677,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not include ResetSeqNumFlag on logon.",
     )
+    parser.add_argument(
+        "--mass-status",
+        action="store_true",
+        help="Request mass order status (35=BG) after drop copy subscription is accepted.",
+    )
     return parser.parse_args()
 
 
@@ -632,6 +723,7 @@ def main() -> None:
         env=args.env,
         client_ids=client_ids,
         reset_seq_num=not args.no_reset_seq,
+        request_mass_status=args.mass_status,
     )
 
     fix_thread = threading.Thread(

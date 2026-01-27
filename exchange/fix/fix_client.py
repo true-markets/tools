@@ -39,7 +39,7 @@ def QueryRest(ctx, method, path, body = None):
     elif ctx.env == "dev":
         url = "http://dev1.truex.co:9742"
     elif ctx.env == "uat":
-        url = "http://uat.truex.co:9742"
+        url = "http://uat1.truex.co:9742"
     elif ctx.env == "prod":
         url = "https://prod.truex.co"
 
