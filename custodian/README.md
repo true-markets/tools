@@ -19,7 +19,7 @@ This script requires the following Python libraries:
 
 You can install these dependencies using `pip`:
 ```
-pip install requests
+pip install requests "pyjwt[crypto]"
 ```
 
 ### Environment Variables
@@ -28,6 +28,9 @@ The script relies on the following environment variables:
 - **`API_KEY_SECRET`**: The API key secret corresponding to the API key ID.
 - **`API_KEY_SCOPE`**: The scope of the API key.
 - **`BASE_URL`** (optional): The base URL of the API. Defaults to `https://api.sandbox.paxos.com`.
+- **`OAUTH_URL`** (optional): The OAuth token endpoint base URL. Defaults to `https://oauth.sandbox.paxos.com`.
+- **`PAXOS_SIGNING_KEY_PATH`** (optional): Path to the PEM private key file for JWS request signing. Required for endpoints that enforce request signing (e.g., `/v2/transfer/internal`).
+- **`PAXOS_SIGNING_KEY_ID`** (optional): The Key ID (from Paxos Dashboard) corresponding to the signing key. Required alongside `PAXOS_SIGNING_KEY_PATH`.
 
 ## Usage
 
