@@ -1,5 +1,6 @@
 tags
 .*
 !.gitignore
+!.github/
 **/*FIX*.xml
 **/log/
