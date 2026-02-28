@@ -12,12 +12,12 @@ from custodian.paxos import get_token, make_request
 def get_accounts(token, base_url, signing_key=None, signing_key_id=None, **filters):
     """Fetch accounts with optional filters, handling pagination."""
     accounts = []
-    page_token = None
+    page_cursor = None
     while True:
-        path = "/v2/accounts"
+        path = "/v2/identity/accounts"
         params = [f"{k}={v}" for k, v in filters.items() if v is not None]
-        if page_token:
-            params.append(f"page_token={page_token}")
+        if page_cursor:
+            params.append(f"page_cursor={page_cursor}")
         if params:
             path += "?" + "&".join(params)
 
@@ -31,8 +31,8 @@ def get_accounts(token, base_url, signing_key=None, signing_key_id=None, **filte
 
         data = resp.json()
         accounts.extend(data.get("items", []))
-        page_token = data.get("next_page_token")
-        if not page_token:
+        page_cursor = data.get("next_page")
+        if not page_cursor:
             break
     return accounts
 
@@ -51,7 +51,7 @@ def get_profile(token, base_url, profile_id, signing_key=None, signing_key_id=No
 
 def get_identity(token, base_url, identity_id, signing_key=None, signing_key_id=None):
     """Fetch a single identity by ID."""
-    resp = make_request(base_url, token, "get", f"/v2/identities/{identity_id}", signing_key=signing_key, signing_key_id=signing_key_id)
+    resp = make_request(base_url, token, "get", f"/v2/identity/identities/{identity_id}", signing_key=signing_key, signing_key_id=signing_key_id)
     if resp.status_code == 404:
         print(f"Warning: identity {identity_id} not found", file=sys.stderr)
         return None
