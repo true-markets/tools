@@ -31,7 +31,7 @@ def get_accounts(token, base_url, signing_key=None, signing_key_id=None, **filte
 
         data = resp.json()
         accounts.extend(data.get("items", []))
-        page_cursor = data.get("next_page")
+        page_cursor = data.get("next_page_cursor")
         if not page_cursor:
             break
     return accounts
