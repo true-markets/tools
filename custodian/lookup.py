@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from custodian.paxos import get_token, make_request
 
 
-def get_accounts(token, base_url, **filters):
+def get_accounts(token, base_url, signing_key=None, signing_key_id=None, **filters):
     """Fetch accounts with optional filters, handling pagination."""
     accounts = []
     page_token = None
@@ -21,7 +21,7 @@ def get_accounts(token, base_url, **filters):
         if params:
             path += "?" + "&".join(params)
 
-        resp = make_request(base_url, token, "get", path)
+        resp = make_request(base_url, token, "get", path, signing_key=signing_key, signing_key_id=signing_key_id)
         if resp.status_code != 200:
             print(f"Error fetching accounts: HTTP {resp.status_code}: {resp.text}", file=sys.stderr)
             sys.exit(1)
@@ -34,38 +34,39 @@ def get_accounts(token, base_url, **filters):
     return accounts
 
 
-def get_profile(token, base_url, profile_id):
+def get_profile(token, base_url, profile_id, signing_key=None, signing_key_id=None):
     """Fetch a single profile by ID."""
-    resp = make_request(base_url, token, "get", f"/v2/profiles/{profile_id}")
+    resp = make_request(base_url, token, "get", f"/v2/profiles/{profile_id}", signing_key=signing_key, signing_key_id=signing_key_id)
     if resp.status_code != 200:
         print(f"Error fetching profile {profile_id}: HTTP {resp.status_code}: {resp.text}", file=sys.stderr)
         return None
     return resp.json()
 
 
-def get_identity(token, base_url, identity_id):
+def get_identity(token, base_url, identity_id, signing_key=None, signing_key_id=None):
     """Fetch a single identity by ID."""
-    resp = make_request(base_url, token, "get", f"/v2/identities/{identity_id}")
+    resp = make_request(base_url, token, "get", f"/v2/identities/{identity_id}", signing_key=signing_key, signing_key_id=signing_key_id)
     if resp.status_code != 200:
         print(f"Error fetching identity {identity_id}: HTTP {resp.status_code}: {resp.text}", file=sys.stderr)
         return None
     return resp.json()
 
 
-def resolve_by_profile(token, base_url, profile_id):
+def resolve_by_profile(token, base_url, profile_id, signing_key=None, signing_key_id=None):
     """Profile -> accounts -> identities."""
-    profile = get_profile(token, base_url, profile_id)
+    sk = dict(signing_key=signing_key, signing_key_id=signing_key_id)
+    profile = get_profile(token, base_url, profile_id, **sk)
     if not profile:
         return []
 
-    accounts = get_accounts(token, base_url)
+    accounts = get_accounts(token, base_url, **sk)
     matching = [a for a in accounts if a.get("profile_id") == profile_id]
 
     results = []
     for acct in matching:
         identity = None
         if acct.get("identity_id"):
-            identity = get_identity(token, base_url, acct["identity_id"])
+            identity = get_identity(token, base_url, acct["identity_id"], **sk)
         results.append({"profile": profile, "account": acct, "identity": identity})
 
     if not matching:
@@ -74,19 +75,20 @@ def resolve_by_profile(token, base_url, profile_id):
     return results
 
 
-def resolve_by_identity(token, base_url, identity_id):
+def resolve_by_identity(token, base_url, identity_id, signing_key=None, signing_key_id=None):
     """Identity -> accounts -> profiles."""
-    identity = get_identity(token, base_url, identity_id)
+    sk = dict(signing_key=signing_key, signing_key_id=signing_key_id)
+    identity = get_identity(token, base_url, identity_id, **sk)
     if not identity:
         return []
 
-    accounts = get_accounts(token, base_url, identity_id=identity_id)
+    accounts = get_accounts(token, base_url, identity_id=identity_id, **sk)
 
     results = []
     for acct in accounts:
         profile = None
         if acct.get("profile_id"):
-            profile = get_profile(token, base_url, acct["profile_id"])
+            profile = get_profile(token, base_url, acct["profile_id"], **sk)
         results.append({"profile": profile, "account": acct, "identity": identity})
 
     if not accounts:
@@ -95,9 +97,10 @@ def resolve_by_identity(token, base_url, identity_id):
     return results
 
 
-def resolve_all(token, base_url):
+def resolve_all(token, base_url, signing_key=None, signing_key_id=None):
     """Fetch all accounts and resolve their identities and profiles."""
-    accounts = get_accounts(token, base_url)
+    sk = dict(signing_key=signing_key, signing_key_id=signing_key_id)
+    accounts = get_accounts(token, base_url, **sk)
 
     # Batch-fetch unique identities and profiles
     identity_ids = {a["identity_id"] for a in accounts if a.get("identity_id")}
@@ -105,11 +108,11 @@ def resolve_all(token, base_url):
 
     identities = {}
     for iid in identity_ids:
-        identities[iid] = get_identity(token, base_url, iid)
+        identities[iid] = get_identity(token, base_url, iid, **sk)
 
     profiles = {}
     for pid in profile_ids:
-        profiles[pid] = get_profile(token, base_url, pid)
+        profiles[pid] = get_profile(token, base_url, pid, **sk)
 
     results = []
     for acct in accounts:
@@ -179,21 +182,29 @@ def main():
     api_key_scope = os.getenv("API_KEY_SCOPE")
     base_url = os.getenv("BASE_URL", "https://api.sandbox.paxos.com")
     oauth_url = os.getenv("OAUTH_URL", "https://oauth.sandbox.paxos.com")
+    signing_key_path = os.getenv("PAXOS_SIGNING_KEY_PATH")
+    signing_key_id = os.getenv("PAXOS_SIGNING_KEY_ID")
 
     if not api_key_id or not api_key_secret or not api_key_scope:
         print("Error: API_KEY_ID, API_KEY_SECRET, and API_KEY_SCOPE must be set as environment variables.")
         sys.exit(1)
 
+    signing_key = None
+    if signing_key_path and signing_key_id:
+        with open(signing_key_path, "rb") as f:
+            signing_key = f.read()
+
     # Suppress token acquisition logs
     token_args = argparse.Namespace(raw=True)
     token = get_token(api_key_id, api_key_secret, api_key_scope, oauth_url, token_args)
 
+    sk = dict(signing_key=signing_key, signing_key_id=signing_key_id)
     if args.profile_id:
-        results = resolve_by_profile(token, base_url, args.profile_id)
+        results = resolve_by_profile(token, base_url, args.profile_id, **sk)
     elif args.identity_id:
-        results = resolve_by_identity(token, base_url, args.identity_id)
+        results = resolve_by_identity(token, base_url, args.identity_id, **sk)
     else:
-        results = resolve_all(token, base_url)
+        results = resolve_all(token, base_url, **sk)
 
     if args.json:
         indent = 4 if args.pretty else None
