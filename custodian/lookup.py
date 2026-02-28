@@ -132,44 +132,39 @@ def resolve_all(token, base_url, signing_key=None, signing_key_id=None):
     return results
 
 
-def truncate_id(id_str, length=8):
+def format_cell(id_str, label=""):
     if not id_str:
         return ""
-    return id_str[:length] + "..." if len(id_str) > length else id_str
+    return f"{id_str} ({label})" if label else id_str
 
 
 def print_table(results):
     """Print results as a formatted table."""
-    header = f"{'Profile':<40} {'Account':<40} {'Identity':<40} {'Status'}"
-    print(header)
-    print("─" * len(header))
-
+    # Build rows first to compute column widths
+    rows = []
     for r in results:
         p = r.get("profile")
         a = r.get("account")
         i = r.get("identity")
 
-        profile_str = ""
-        if p:
-            nickname = p.get("nickname", "")
-            pid = truncate_id(p.get("id", ""))
-            profile_str = f"{pid} ({nickname})" if nickname else pid
+        profile_str = format_cell(p.get("id", ""), p.get("nickname", "")) if p else ""
+        account_str = format_cell(a.get("id", ""), a.get("description", "")) if a else ""
+        identity_str = format_cell(i.get("id", ""), i.get("type", "")) if i else ""
+        status = i.get("status", "") if i else ""
 
-        account_str = ""
-        if a:
-            desc = a.get("description", "")
-            aid = truncate_id(a.get("id", ""))
-            account_str = f"{aid} ({desc})" if desc else aid
+        rows.append((profile_str, account_str, identity_str, status))
 
-        identity_str = ""
-        status = ""
-        if i:
-            itype = i.get("type", "")
-            iid = truncate_id(i.get("id", ""))
-            identity_str = f"{iid} ({itype})" if itype else iid
-            status = i.get("status", "")
+    headers = ("Profile", "Account", "Identity", "Status")
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for j, cell in enumerate(row):
+            widths[j] = max(widths[j], len(cell))
 
-        print(f"{profile_str:<40} {account_str:<40} {identity_str:<40} {status}")
+    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+    print(fmt.format(*headers))
+    print("─" * (sum(widths) + 2 * (len(widths) - 1)))
+    for row in rows:
+        print(fmt.format(*row))
 
 
 def main():
