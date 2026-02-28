@@ -24,14 +24,14 @@ def sign_request(secret_key, method, path, body, timestamp):
     return base64.b64encode(hmac_digest).decode('utf-8')
 
 
-def make_request(server, path, method, body="", client_id="0", auth_token=None, secret_key=None):
+def make_request(server, path, method, body="", client_id="0", auth_token=None, secret_key=None, base_path="/api/v1/"):
     """Make an authenticated request to the exchange REST API."""
     if auth_token is None:
         auth_token = os.getenv("TRUEX_KEY_ID")
     if secret_key is None:
         secret_key = os.getenv("TRUEX_KEY_SECRET")
 
-    url = "http://" + server + "/api/v1/" + path
+    url = "http://" + server + base_path + path
     parsed_url = urlparse(url)
     url_path = parsed_url.path
 
