@@ -84,5 +84,45 @@ python paxos.py --method post --path /v2/sandbox/profiles/cac2c7cb-2c79-47aa-acb
 - Ensure that your API credentials and environment variables are correctly configured.
 - This script is designed for testing and small-scale automation. For large-scale use, additional error handling and optimizations may be required.
 
+---
+
+# Profile/Account/Identity Lookup Script
+
+`lookup.py` resolves the relationship chain between Paxos profiles, accounts, and identities. An **Account** is the bridge entity that links a profile to an identity — this script automates the multi-call resolution.
+
+## Usage
+
+```bash
+# Lookup by profile ID — resolves profile → account → identity
+python custodian/lookup.py --profile-id <uuid>
+
+# Lookup by identity ID — resolves identity → account → profile
+python custodian/lookup.py --identity-id <uuid>
+
+# List all account mappings
+python custodian/lookup.py --all
+```
+
+### Output Formats
+
+By default, results are printed as a table:
+
+```
+Profile                                  Account                                  Identity                                 Status
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+abc123... (nickname)                     def456... (description)                  ghi789... (PERSON)                       APPROVED
+```
+
+Use `--json` for machine-readable output, and `--pretty` to indent the JSON:
+
+```bash
+python custodian/lookup.py --all --json
+python custodian/lookup.py --all --json --pretty
+```
+
+### Environment Variables
+
+Same as `paxos.py` — requires `API_KEY_ID`, `API_KEY_SECRET`, and `API_KEY_SCOPE`. No signing key is needed (all read-only GET calls).
+
 ## License
 This script is provided "as-is" and is intended for educational and testing purposes. Use at your own risk.
