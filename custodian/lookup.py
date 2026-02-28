@@ -37,6 +37,31 @@ def get_accounts(token, base_url, signing_key=None, signing_key_id=None, **filte
     return accounts
 
 
+def get_profiles(token, base_url, signing_key=None, signing_key_id=None):
+    """Fetch all profiles, handling pagination."""
+    profiles = []
+    page_cursor = None
+    while True:
+        path = "/v2/profiles"
+        if page_cursor:
+            path += f"?page_cursor={page_cursor}"
+
+        resp = make_request(base_url, token, "get", path, signing_key=signing_key, signing_key_id=signing_key_id)
+        if resp.status_code == 404:
+            print(f"Warning: profiles endpoint returned 404", file=sys.stderr)
+            return profiles
+        if resp.status_code != 200:
+            print(f"Error fetching profiles: HTTP {resp.status_code}: {resp.text}", file=sys.stderr)
+            sys.exit(1)
+
+        data = resp.json()
+        profiles.extend(data.get("items", []))
+        page_cursor = data.get("next_page_cursor")
+        if not page_cursor:
+            break
+    return profiles
+
+
 def get_profile(token, base_url, profile_id, signing_key=None, signing_key_id=None):
     """Fetch a single profile by ID."""
     resp = make_request(base_url, token, "get", f"/v2/profiles/{profile_id}", signing_key=signing_key, signing_key_id=signing_key_id)
@@ -107,27 +132,36 @@ def resolve_by_identity(token, base_url, identity_id, signing_key=None, signing_
 
 
 def resolve_all(token, base_url, signing_key=None, signing_key_id=None):
-    """Fetch all accounts and resolve their identities and profiles."""
+    """Fetch all accounts and profiles, resolve their relationships."""
     sk = dict(signing_key=signing_key, signing_key_id=signing_key_id)
     accounts = get_accounts(token, base_url, **sk)
+    all_profiles = get_profiles(token, base_url, **sk)
 
-    # Batch-fetch unique identities and profiles
+    # Batch-fetch unique identities
     identity_ids = {a["identity_id"] for a in accounts if a.get("identity_id")}
-    profile_ids = {a["profile_id"] for a in accounts if a.get("profile_id")}
-
     identities = {}
     for iid in identity_ids:
         identities[iid] = get_identity(token, base_url, iid, **sk)
 
-    profiles = {}
-    for pid in profile_ids:
-        profiles[pid] = get_profile(token, base_url, pid, **sk)
+    # Index profiles by ID for quick lookup
+    profiles_by_id = {p["id"]: p for p in all_profiles if p.get("id")}
+
+    # Track which profile IDs are linked to an account
+    linked_profile_ids = set()
 
     results = []
     for acct in accounts:
-        profile = profiles.get(acct.get("profile_id"))
+        pid = acct.get("profile_id")
+        if pid:
+            linked_profile_ids.add(pid)
+        profile = profiles_by_id.get(pid)
         identity = identities.get(acct.get("identity_id"))
         results.append({"profile": profile, "account": acct, "identity": identity})
+
+    # Include profiles that aren't linked to any account
+    for p in all_profiles:
+        if p.get("id") not in linked_profile_ids:
+            results.append({"profile": p, "account": None, "identity": None})
 
     return results
 
