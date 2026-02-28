@@ -22,6 +22,9 @@ def get_accounts(token, base_url, signing_key=None, signing_key_id=None, **filte
             path += "?" + "&".join(params)
 
         resp = make_request(base_url, token, "get", path, signing_key=signing_key, signing_key_id=signing_key_id)
+        if resp.status_code == 404:
+            print(f"Warning: accounts endpoint returned 404", file=sys.stderr)
+            return accounts
         if resp.status_code != 200:
             print(f"Error fetching accounts: HTTP {resp.status_code}: {resp.text}", file=sys.stderr)
             sys.exit(1)
@@ -37,6 +40,9 @@ def get_accounts(token, base_url, signing_key=None, signing_key_id=None, **filte
 def get_profile(token, base_url, profile_id, signing_key=None, signing_key_id=None):
     """Fetch a single profile by ID."""
     resp = make_request(base_url, token, "get", f"/v2/profiles/{profile_id}", signing_key=signing_key, signing_key_id=signing_key_id)
+    if resp.status_code == 404:
+        print(f"Warning: profile {profile_id} not found", file=sys.stderr)
+        return None
     if resp.status_code != 200:
         print(f"Error fetching profile {profile_id}: HTTP {resp.status_code}: {resp.text}", file=sys.stderr)
         return None
@@ -46,6 +52,9 @@ def get_profile(token, base_url, profile_id, signing_key=None, signing_key_id=No
 def get_identity(token, base_url, identity_id, signing_key=None, signing_key_id=None):
     """Fetch a single identity by ID."""
     resp = make_request(base_url, token, "get", f"/v2/identities/{identity_id}", signing_key=signing_key, signing_key_id=signing_key_id)
+    if resp.status_code == 404:
+        print(f"Warning: identity {identity_id} not found", file=sys.stderr)
+        return None
     if resp.status_code != 200:
         print(f"Error fetching identity {identity_id}: HTTP {resp.status_code}: {resp.text}", file=sys.stderr)
         return None
