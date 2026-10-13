@@ -70,8 +70,10 @@ def query_rest(
         }
     else:
         # ES256 keys authenticate with a JWT minted by the auth API
+        # RAG checks the timestamp header on signed endpoints even for JWT callers
         headers = {
             "Authorization": f"Bearer {signer.access_token(env)}",
+            "x-truex-auth-timestamp": str(int(time.time())),
             "Content-Type": "application/json",
         }
 

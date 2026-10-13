@@ -71,8 +71,10 @@ def QueryRest(ctx, method, path, body = None):
         except (RuntimeError, ValueError) as e:
             ctx.message_queue.put(f"Failed to get access token: {e}")
             return None
+        # RAG checks the timestamp header on signed endpoints even for JWT callers
         headers = {
             "Authorization": f"Bearer {token}",
+            HEADER_AUTH_TIMESTAMP: str(int(time.time())),
             "Content-Type": "application/json"
         }
 
