@@ -20,6 +20,8 @@ import re
 from datetime import datetime
 from urllib.parse import urlparse
 
+from truex_auth import LogonSigner, cefi_api_url
+
 fix_stop_event = threading.Event()
 
 # =============================
@@ -31,44 +33,50 @@ def QueryRest(ctx, method, path, body = None):
     HEADER_AUTH_SIGNATURE = "x-truex-auth-signature"
     HEADER_AUTH_TOKEN = "x-truex-auth-token"
 
-    url = ""
-    if ctx.env == "local":
-        host = os.getenv("TRUEX_HOST")
-        port = os.getenv("TRUEX_REST_PORT")
-        url = f"http://{host}:{port}"
-    elif ctx.env == "dev":
-        url = "http://dev1.truex.co:9742"
-    elif ctx.env == "uat":
-        url = "http://uat1.truex.co:9742"
-    elif ctx.env == "prod":
-        url = "https://prod.truex.co"
+    try:
+        url = cefi_api_url(ctx.env) + path
+    except ValueError as e:
+        ctx.message_queue.put(f"REST {method} {path} failed: {e}")
+        return None
 
-    url += path
+    if ctx.signer.is_hmac:
+        # Prepare the current timestamp and method
+        auth_timestamp = str(int(time.time()))
+        http_method = method
 
-    # Prepare the current timestamp and method
-    auth_timestamp = str(int(time.time()))
-    http_method = method
+        # Combine the values into a payload for HMAC
+        parsed_url = urlparse(url)
+        path = parsed_url.path
+        payload = auth_timestamp + http_method.upper() + path
 
-    # Combine the values into a payload for HMAC
-    parsed_url = urlparse(url)
-    path = parsed_url.path
-    payload = auth_timestamp + http_method.upper() + path
+        # Create HMAC signature using the secret key
+        hmac_key = ctx.signer.hmac_secret.encode('utf-8')
+        hmac_message = payload.encode('utf-8')
+        hmac_digest = hmac.new(hmac_key, hmac_message, hashlib.sha256).digest()
 
-    # Create HMAC signature using the secret key
-    hmac_key = ctx.apiKeySecret.encode('utf-8')
-    hmac_message = payload.encode('utf-8')
-    hmac_digest = hmac.new(hmac_key, hmac_message, hashlib.sha256).digest()
+        # Convert the HMAC result to base64
+        auth_signature = base64.b64encode(hmac_digest).decode('utf-8')
 
-    # Convert the HMAC result to base64
-    auth_signature = base64.b64encode(hmac_digest).decode('utf-8')
-
-    # Setup the headers for the request
-    headers = {
-        HEADER_AUTH_TIMESTAMP: auth_timestamp,
-        HEADER_AUTH_SIGNATURE: auth_signature,
-        HEADER_AUTH_TOKEN: ctx.apiKeyId,
-        "Content-Type": "application/json"
-    }
+        # Setup the headers for the request
+        headers = {
+            HEADER_AUTH_TIMESTAMP: auth_timestamp,
+            HEADER_AUTH_SIGNATURE: auth_signature,
+            HEADER_AUTH_TOKEN: ctx.signer.key_id,
+            "Content-Type": "application/json"
+        }
+    else:
+        # ES256 keys authenticate with a JWT minted by the auth API
+        try:
+            token = ctx.signer.access_token(ctx.env)
+        except (RuntimeError, ValueError) as e:
+            ctx.message_queue.put(f"Failed to get access token: {e}")
+            return None
+        # RAG checks the timestamp header on signed endpoints even for JWT callers
+        headers = {
+            "Authorization": f"Bearer {token}",
+            HEADER_AUTH_TIMESTAMP: str(int(time.time())),
+            "Content-Type": "application/json"
+        }
 
     # Perform the GET request (or other HTTP methods as necessary)
     response = None
@@ -92,7 +100,7 @@ def QueryRest(ctx, method, path, body = None):
     return response.json()
 
 def GetInstrumentIds(ctx):
-    response = QueryRest(ctx, "get", "/api/v1/instrument")
+    response = QueryRest(ctx, "get", "/v1/cefi/instruments")
 
     # Loop through each entry in the response data
     if not isinstance(response, list):
@@ -106,7 +114,7 @@ def GetInstrumentIds(ctx):
     return instruments
 
 def GetClientIds(ctx):
-    response = QueryRest(ctx, "get", "/api/v1/client")
+    response = QueryRest(ctx, "get", "/v1/cefi/clients")
 
     matching_ids = []
     # Loop through each entry in the response data
@@ -125,7 +133,7 @@ def GetClientIds(ctx):
 
 def GetOrders(ctx):
     # Perform the GET request (or other HTTP methods as necessary)
-    response = QueryRest(ctx, "get", "/api/v1/order/active")
+    response = QueryRest(ctx, "get", "/v1/cefi/orders/active")
 
     if isinstance(response, list) and len(response) > 0:
         i = 0
@@ -136,26 +144,6 @@ def GetOrders(ctx):
             i+=1
     else:
         ctx.message_queue.put("No orders found.")
-
-def GeneratePassword(secret, sending_time, msg_type, msg_seq_num, sender_comp_id, target_comp_id, username):
-    # Step 1: Concatenate the fields to form the message
-    message = str(sending_time) + str(msg_type) + str(msg_seq_num) + str(sender_comp_id) + str(target_comp_id) + str(username)
-
-    # Step 2: Handle potential encoding issues
-    try:
-        message_bytes = message.encode('utf-8')
-    except UnicodeEncodeError as e:
-        # Optionally, remove invalid characters or log them
-        message_bytes = message.encode('utf-8', 'ignore')  # or 'replace'
-
-    # Step 3: Create the HMAC-SHA-256 signature
-    secret_bytes = secret.encode('utf-8')
-    hmac_sha256 = hmac.new(secret_bytes, message_bytes, hashlib.sha256)
-
-    # Step 4: Encode the HMAC in base64
-    signature = base64.b64encode(hmac_sha256.digest()).decode('utf-8')
-
-    return signature
 
 class Quote:
     def __init__(self, price: float, size: float):
@@ -656,6 +644,8 @@ class FIXApp(fix.Application):
         self.reset_seq_num = True
         # request ids
         self.securityReqID_ = None
+        self.clientIds = []
+        self.instrumentIds = {}
 
     def OrderEntrySession(self):
         if self.env == "local" or self.env == "dev":
@@ -683,7 +673,11 @@ class FIXApp(fix.Application):
 
     def onLogon(self, sessionID):
         self.sessions[sessionID.getTargetCompID().getValue()] = sessionID
-        self.clientIds = GetClientIds(self)
+        if self.configuredClientIds:
+            self.clientIds = list(self.configuredClientIds)
+            self.message_queue.put(f"Using client ID(s) from --client-id: {self.clientIds}")
+        else:
+            self.clientIds = GetClientIds(self)
         self.instrumentIds = GetInstrumentIds(self)
         for key, instrument in self.instrumentIds.items():
             self.message_queue.put(f"Instrument: {key} Symbol: {instrument['info']['symbol']}")
@@ -719,19 +713,19 @@ class FIXApp(fix.Application):
             sender_comp_id = message.getHeader().getField(fix.SenderCompID()).getString()  # SenderCompID (49)
             target_comp_id = message.getHeader().getField(fix.TargetCompID()).getString()  # TargetCompID (56)
             self.message_queue.put(f"sending_time: {sending_time}, msg_type: {msg_type}, msg_seq_num: {msg_seq_num}, sender_comp_id: {sender_comp_id}, target_comp_id: {target_comp_id}")
-            # Generate the HMAC-SHA-256 signature for the password
-            password = GeneratePassword(self.apiKeySecret, sending_time, msg_type, msg_seq_num, sender_comp_id, target_comp_id, self.apiKeyId)
+            # Sign the logon with the configured API key (ES256 or HMAC-SHA-256)
+            password = self.signer.logon_password(sending_time, msg_type, msg_seq_num, sender_comp_id, target_comp_id)
 
             message.getHeader().setField(52, sending_time)
             # Set ResetSeqNum
             if self.reset_seq_num:
                 message.setField(fix.ResetSeqNumFlag(True))
             # Set Username (Tag 553)
-            message.setField(fix.Username(self.apiKeyId))  # Set tag 553
+            message.setField(fix.Username(self.signer.key_id))  # Set tag 553
             # Set Password (Tag 554)
             message.setField(fix.Password(password))  # Set tag 554
 
-            self.message_queue.put("Sending Logon message.")
+            self.message_queue.put(f"Sending Logon message ({self.signer.algorithm} key {self.signer.key_id}).")
         self.message_queue.put(f"<TX< {message}")
 
     def fromAdmin(self, message, sessionID):
@@ -1683,7 +1677,15 @@ def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="FIX Trading Tool with Interactive CLI")
     parser.add_argument("--env", choices=["local", "dev", "uat", "prod"], required=True, help="Environment to run the FIX client in")
+    parser.add_argument("--key-file", help="ES256 API key JSON file downloaded from the web UI (or set TRUEX_KEY_FILE). Defaults to the TRUEX_KEY_ID/TRUEX_KEY_SECRET HMAC key.")
+    parser.add_argument("--client-id", action="append", default=[], help="Client ID to trade for; repeat for more. Defaults to the clients the REST API returns for the key.")
     args = parser.parse_args()
+
+    try:
+        signer = LogonSigner.from_args_or_env(args.key_file)
+    except (OSError, ValueError) as e:
+        print(f"Failed to load API key: {e}")
+        sys.exit(1)
 
     # Determine FIX configuration file based on environment
     env = args.env
@@ -1709,9 +1711,8 @@ def main():
     # Initialize the FIX application
     fix_app = FIXApp(message_queue, market_data_queue, instrument_data_queue, app_id="FIX_Client")
     fix_app.env = env.lower()
-    # Grab key ID and secret from env vars
-    fix_app.apiKeyId = os.getenv("TRUEX_KEY_ID")
-    fix_app.apiKeySecret = os.getenv("TRUEX_KEY_SECRET")
+    fix_app.signer = signer
+    fix_app.configuredClientIds = args.client_id
 
 
     # Start the FIX session in a separate thread
