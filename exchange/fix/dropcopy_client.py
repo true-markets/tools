@@ -25,6 +25,8 @@ import quickfix as fix
 import quickfix50sp2 as fix50sp2
 import requests
 
+from truex_auth import LogonSigner
+
 
 CONFIG_BY_ENV = {
     "local": "dc_config_local.cfg",
@@ -122,29 +124,6 @@ def get_client_ids(env: str, mnemonic: str, api_key_id: str, api_key_secret: str
     if not client_ids:
         raise RuntimeError("No client IDs returned by REST API")
     return client_ids
-
-
-def generate_password(
-    secret: str,
-    sending_time: str,
-    msg_type: str,
-    msg_seq_num: str,
-    sender_comp_id: str,
-    target_comp_id: str,
-    username: str,
-) -> str:
-    """
-    Generate the FIX logon password using the TrueX HMAC recipe.
-    """
-    payload = (
-        f"{sending_time}{msg_type}{msg_seq_num}{sender_comp_id}{target_comp_id}{username}"
-    )
-    digest = hmac.new(
-        secret.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).digest()
-    return base64.b64encode(digest).decode("utf-8")
 
 
 @dataclass
@@ -304,8 +283,7 @@ class DropCopyApp(fix.Application):
     def __init__(
         self,
         event_queue: queue.Queue,
-        api_key_id: str,
-        api_key_secret: str,
+        signer: LogonSigner,
         env: str,
         client_ids: Tuple[str, ...],
         reset_seq_num: bool = True,
@@ -313,8 +291,7 @@ class DropCopyApp(fix.Application):
     ):
         super().__init__()
         self.event_queue = event_queue
-        self.api_key_id = api_key_id
-        self.api_key_secret = api_key_secret
+        self.signer = signer
         self.env = env
         self.client_ids = client_ids
         self.reset_seq_num = reset_seq_num
@@ -376,20 +353,18 @@ class DropCopyApp(fix.Application):
         msg_type = header.getField(fix.MsgType()).getString()
         sender_comp_id = header.getField(fix.SenderCompID()).getString()
         target_comp_id = header.getField(fix.TargetCompID()).getString()
-        password = generate_password(
-            self.api_key_secret,
+        password = self.signer.logon_password(
             sending_time,
             msg_type,
             msg_seq_num,
             sender_comp_id,
             target_comp_id,
-            self.api_key_id,
         )
 
         header.setField(52, sending_time)
         if self.reset_seq_num:
             message.setField(fix.ResetSeqNumFlag(True))
-        message.setField(fix.Username(self.api_key_id))
+        message.setField(fix.Username(self.signer.key_id))
         message.setField(fix.Password(password))
 
     def _send_drop_copy_request(self, session_id: fix.SessionID) -> None:
@@ -669,6 +644,18 @@ def parse_args() -> argparse.Namespace:
         help="Client mnemonic to receive drops for.",
     )
     parser.add_argument(
+        "--key-file",
+        help="ES256 API key JSON file downloaded from the web UI (or set "
+        "TRUEX_KEY_FILE). Defaults to the TRUEX_KEY_ID/TRUEX_KEY_SECRET HMAC key.",
+    )
+    parser.add_argument(
+        "--client-id",
+        action="append",
+        default=[],
+        help="Client ID to subscribe for; repeat for more. Required with an ES256 "
+        "key, since client lookup over REST needs an HMAC key.",
+    )
+    parser.add_argument(
         "--config",
         help="Path to a FIX configuration file. Overrides --env default.",
     )
@@ -699,16 +686,24 @@ def main() -> None:
         print(f"Config file not found: {config_path}")
         sys.exit(1)
 
-    api_key_id = os.getenv("TRUEX_KEY_ID")
-    api_key_secret = os.getenv("TRUEX_KEY_SECRET")
-    if not api_key_id or not api_key_secret:
-        print("TRUEX_KEY_ID and TRUEX_KEY_SECRET must be set in the environment.")
+    try:
+        signer = LogonSigner.from_args_or_env(args.key_file)
+    except (OSError, ValueError) as exc:
+        print(f"Failed to load API key: {exc}")
         sys.exit(1)
 
-    try:
-        client_ids = get_client_ids(args.env, args.mnemonic, api_key_id, api_key_secret)
-    except RuntimeError as exc:
-        print(f"Failed to fetch client IDs: {exc}")
+    if args.client_id:
+        client_ids = tuple(args.client_id)
+    elif signer.is_hmac:
+        try:
+            client_ids = get_client_ids(
+                args.env, args.mnemonic, signer.key_id, signer.hmac_secret
+            )
+        except RuntimeError as exc:
+            print(f"Failed to fetch client IDs: {exc}")
+            sys.exit(1)
+    else:
+        print("--client-id is required with an ES256 key; REST client lookup needs an HMAC key.")
         sys.exit(1)
 
     print(f"Using {len(client_ids)} client IDs for drop copy subscription")
@@ -718,8 +713,7 @@ def main() -> None:
 
     fix_app = DropCopyApp(
         event_queue=event_queue,
-        api_key_id=api_key_id,
-        api_key_secret=api_key_secret,
+        signer=signer,
         env=args.env,
         client_ids=client_ids,
         reset_seq_num=not args.no_reset_seq,

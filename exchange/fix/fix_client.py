@@ -20,12 +20,19 @@ import re
 from datetime import datetime
 from urllib.parse import urlparse
 
+from truex_auth import LogonSigner
+
 fix_stop_event = threading.Event()
 
 # =============================
 # Helper functions
 # =============================
 def QueryRest(ctx, method, path, body = None):
+    # The REST API only accepts legacy HMAC keys.
+    if not ctx.apiKeySecret:
+        ctx.message_queue.put(f"Skipping REST {method} {path}: requires an HMAC key (TRUEX_KEY_ID/TRUEX_KEY_SECRET).")
+        return None
+
     # Define the constants for the headers
     HEADER_AUTH_TIMESTAMP = "x-truex-auth-timestamp"
     HEADER_AUTH_SIGNATURE = "x-truex-auth-signature"
@@ -136,26 +143,6 @@ def GetOrders(ctx):
             i+=1
     else:
         ctx.message_queue.put("No orders found.")
-
-def GeneratePassword(secret, sending_time, msg_type, msg_seq_num, sender_comp_id, target_comp_id, username):
-    # Step 1: Concatenate the fields to form the message
-    message = str(sending_time) + str(msg_type) + str(msg_seq_num) + str(sender_comp_id) + str(target_comp_id) + str(username)
-
-    # Step 2: Handle potential encoding issues
-    try:
-        message_bytes = message.encode('utf-8')
-    except UnicodeEncodeError as e:
-        # Optionally, remove invalid characters or log them
-        message_bytes = message.encode('utf-8', 'ignore')  # or 'replace'
-
-    # Step 3: Create the HMAC-SHA-256 signature
-    secret_bytes = secret.encode('utf-8')
-    hmac_sha256 = hmac.new(secret_bytes, message_bytes, hashlib.sha256)
-
-    # Step 4: Encode the HMAC in base64
-    signature = base64.b64encode(hmac_sha256.digest()).decode('utf-8')
-
-    return signature
 
 class Quote:
     def __init__(self, price: float, size: float):
@@ -656,6 +643,8 @@ class FIXApp(fix.Application):
         self.reset_seq_num = True
         # request ids
         self.securityReqID_ = None
+        self.clientIds = []
+        self.instrumentIds = {}
 
     def OrderEntrySession(self):
         if self.env == "local" or self.env == "dev":
@@ -683,8 +672,15 @@ class FIXApp(fix.Application):
 
     def onLogon(self, sessionID):
         self.sessions[sessionID.getTargetCompID().getValue()] = sessionID
-        self.clientIds = GetClientIds(self)
-        self.instrumentIds = GetInstrumentIds(self)
+        if self.configuredClientIds:
+            self.clientIds = list(self.configuredClientIds)
+            self.message_queue.put(f"Using client ID(s) from --client-id: {self.clientIds}")
+        elif self.apiKeySecret:
+            self.clientIds = GetClientIds(self)
+        else:
+            self.message_queue.put("No client IDs: pass --client-id when logging on with an ES256 key file.")
+        if self.apiKeySecret:
+            self.instrumentIds = GetInstrumentIds(self)
         for key, instrument in self.instrumentIds.items():
             self.message_queue.put(f"Instrument: {key} Symbol: {instrument['info']['symbol']}")
         if (sessionID != None):
@@ -719,19 +715,19 @@ class FIXApp(fix.Application):
             sender_comp_id = message.getHeader().getField(fix.SenderCompID()).getString()  # SenderCompID (49)
             target_comp_id = message.getHeader().getField(fix.TargetCompID()).getString()  # TargetCompID (56)
             self.message_queue.put(f"sending_time: {sending_time}, msg_type: {msg_type}, msg_seq_num: {msg_seq_num}, sender_comp_id: {sender_comp_id}, target_comp_id: {target_comp_id}")
-            # Generate the HMAC-SHA-256 signature for the password
-            password = GeneratePassword(self.apiKeySecret, sending_time, msg_type, msg_seq_num, sender_comp_id, target_comp_id, self.apiKeyId)
+            # Sign the logon with the configured API key (ES256 or HMAC-SHA-256)
+            password = self.signer.logon_password(sending_time, msg_type, msg_seq_num, sender_comp_id, target_comp_id)
 
             message.getHeader().setField(52, sending_time)
             # Set ResetSeqNum
             if self.reset_seq_num:
                 message.setField(fix.ResetSeqNumFlag(True))
             # Set Username (Tag 553)
-            message.setField(fix.Username(self.apiKeyId))  # Set tag 553
+            message.setField(fix.Username(self.signer.key_id))  # Set tag 553
             # Set Password (Tag 554)
             message.setField(fix.Password(password))  # Set tag 554
 
-            self.message_queue.put("Sending Logon message.")
+            self.message_queue.put(f"Sending Logon message ({self.signer.algorithm} key {self.signer.key_id}).")
         self.message_queue.put(f"<TX< {message}")
 
     def fromAdmin(self, message, sessionID):
@@ -1683,7 +1679,15 @@ def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="FIX Trading Tool with Interactive CLI")
     parser.add_argument("--env", choices=["local", "dev", "uat", "prod"], required=True, help="Environment to run the FIX client in")
+    parser.add_argument("--key-file", help="ES256 API key JSON file downloaded from the web UI (or set TRUEX_KEY_FILE). Defaults to the TRUEX_KEY_ID/TRUEX_KEY_SECRET HMAC key.")
+    parser.add_argument("--client-id", action="append", default=[], help="Client ID to trade for; repeat for more. Required with an ES256 key, since client lookup over REST needs an HMAC key.")
     args = parser.parse_args()
+
+    try:
+        signer = LogonSigner.from_args_or_env(args.key_file)
+    except (OSError, ValueError) as e:
+        print(f"Failed to load API key: {e}")
+        sys.exit(1)
 
     # Determine FIX configuration file based on environment
     env = args.env
@@ -1709,9 +1713,11 @@ def main():
     # Initialize the FIX application
     fix_app = FIXApp(message_queue, market_data_queue, instrument_data_queue, app_id="FIX_Client")
     fix_app.env = env.lower()
-    # Grab key ID and secret from env vars
-    fix_app.apiKeyId = os.getenv("TRUEX_KEY_ID")
-    fix_app.apiKeySecret = os.getenv("TRUEX_KEY_SECRET")
+    fix_app.signer = signer
+    fix_app.configuredClientIds = args.client_id
+    # REST calls are HMAC-signed, so they only run with an HMAC key
+    fix_app.apiKeyId = signer.key_id
+    fix_app.apiKeySecret = signer.hmac_secret
 
 
     # Start the FIX session in a separate thread
