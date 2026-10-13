@@ -28,11 +28,6 @@ fix_stop_event = threading.Event()
 # Helper functions
 # =============================
 def QueryRest(ctx, method, path, body = None):
-    # The REST API only accepts legacy HMAC keys.
-    if not ctx.apiKeySecret:
-        ctx.message_queue.put(f"Skipping REST {method} {path}: requires an HMAC key (TRUEX_KEY_ID/TRUEX_KEY_SECRET).")
-        return None
-
     # Define the constants for the headers
     HEADER_AUTH_TIMESTAMP = "x-truex-auth-timestamp"
     HEADER_AUTH_SIGNATURE = "x-truex-auth-signature"
@@ -52,30 +47,42 @@ def QueryRest(ctx, method, path, body = None):
 
     url += path
 
-    # Prepare the current timestamp and method
-    auth_timestamp = str(int(time.time()))
-    http_method = method
+    if ctx.signer.is_hmac:
+        # Prepare the current timestamp and method
+        auth_timestamp = str(int(time.time()))
+        http_method = method
 
-    # Combine the values into a payload for HMAC
-    parsed_url = urlparse(url)
-    path = parsed_url.path
-    payload = auth_timestamp + http_method.upper() + path
+        # Combine the values into a payload for HMAC
+        parsed_url = urlparse(url)
+        path = parsed_url.path
+        payload = auth_timestamp + http_method.upper() + path
 
-    # Create HMAC signature using the secret key
-    hmac_key = ctx.apiKeySecret.encode('utf-8')
-    hmac_message = payload.encode('utf-8')
-    hmac_digest = hmac.new(hmac_key, hmac_message, hashlib.sha256).digest()
+        # Create HMAC signature using the secret key
+        hmac_key = ctx.signer.hmac_secret.encode('utf-8')
+        hmac_message = payload.encode('utf-8')
+        hmac_digest = hmac.new(hmac_key, hmac_message, hashlib.sha256).digest()
 
-    # Convert the HMAC result to base64
-    auth_signature = base64.b64encode(hmac_digest).decode('utf-8')
+        # Convert the HMAC result to base64
+        auth_signature = base64.b64encode(hmac_digest).decode('utf-8')
 
-    # Setup the headers for the request
-    headers = {
-        HEADER_AUTH_TIMESTAMP: auth_timestamp,
-        HEADER_AUTH_SIGNATURE: auth_signature,
-        HEADER_AUTH_TOKEN: ctx.apiKeyId,
-        "Content-Type": "application/json"
-    }
+        # Setup the headers for the request
+        headers = {
+            HEADER_AUTH_TIMESTAMP: auth_timestamp,
+            HEADER_AUTH_SIGNATURE: auth_signature,
+            HEADER_AUTH_TOKEN: ctx.signer.key_id,
+            "Content-Type": "application/json"
+        }
+    else:
+        # ES256 keys authenticate with a JWT minted by the auth API
+        try:
+            token = ctx.signer.access_token(ctx.env)
+        except (RuntimeError, ValueError) as e:
+            ctx.message_queue.put(f"Failed to get access token: {e}")
+            return None
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
 
     # Perform the GET request (or other HTTP methods as necessary)
     response = None
@@ -675,12 +682,9 @@ class FIXApp(fix.Application):
         if self.configuredClientIds:
             self.clientIds = list(self.configuredClientIds)
             self.message_queue.put(f"Using client ID(s) from --client-id: {self.clientIds}")
-        elif self.apiKeySecret:
-            self.clientIds = GetClientIds(self)
         else:
-            self.message_queue.put("No client IDs: pass --client-id when logging on with an ES256 key file.")
-        if self.apiKeySecret:
-            self.instrumentIds = GetInstrumentIds(self)
+            self.clientIds = GetClientIds(self)
+        self.instrumentIds = GetInstrumentIds(self)
         for key, instrument in self.instrumentIds.items():
             self.message_queue.put(f"Instrument: {key} Symbol: {instrument['info']['symbol']}")
         if (sessionID != None):
@@ -1680,7 +1684,7 @@ def main():
     parser = argparse.ArgumentParser(description="FIX Trading Tool with Interactive CLI")
     parser.add_argument("--env", choices=["local", "dev", "uat", "prod"], required=True, help="Environment to run the FIX client in")
     parser.add_argument("--key-file", help="ES256 API key JSON file downloaded from the web UI (or set TRUEX_KEY_FILE). Defaults to the TRUEX_KEY_ID/TRUEX_KEY_SECRET HMAC key.")
-    parser.add_argument("--client-id", action="append", default=[], help="Client ID to trade for; repeat for more. Required with an ES256 key, since client lookup over REST needs an HMAC key.")
+    parser.add_argument("--client-id", action="append", default=[], help="Client ID to trade for; repeat for more. Defaults to the clients the REST API returns for the key.")
     args = parser.parse_args()
 
     try:
@@ -1715,9 +1719,6 @@ def main():
     fix_app.env = env.lower()
     fix_app.signer = signer
     fix_app.configuredClientIds = args.client_id
-    # REST calls are HMAC-signed, so they only run with an HMAC key
-    fix_app.apiKeyId = signer.key_id
-    fix_app.apiKeySecret = signer.hmac_secret
 
 
     # Start the FIX session in a separate thread

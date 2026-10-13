@@ -8,7 +8,7 @@ This Python script provides a **FIX (Financial Information Exchange)** trading c
 - Interactive command-line interface built using `urwid`.
 - Integration with FIX protocol using `quickfix` and `quickfix50sp2`.
 - FIX logon with ES256 API keys from the web UI (JSON key file) or legacy HMAC keys.
-- HMAC-based API client ID retrieval for different environments (HMAC keys only).
+- REST lookups (client IDs, instruments, active orders) authenticated with a JWT from the auth API for ES256 keys, or HMAC signatures for HMAC keys.
 - Supports `order`, `modify`, `cancel`, and `logout` commands.
 - Real-time FIX session monitoring and management.
 
@@ -39,11 +39,13 @@ The `quickfix` library must be installed separately (refer to [QuickFIX installa
 
    **ES256 key (recommended).** Create a key at console.truemarkets.co (organization key) or in Settings → API keys (personal key) and download the JSON key file. Pass it with `--key-file`, or set `TRUEX_KEY_FILE`:
 ```
-python fix_client.py --env dev --key-file ~/Downloads/truemarkets-api-key-6c951334.json --client-id 1234
+python fix_client.py --env dev --key-file ~/Downloads/truemarkets-api-key-6c951334.json
 ```
    The file holds `key_id` and a P-256 `private_key` JWK. The logon Password (554) is the unpadded base64url raw `r || s` ES256 signature. Keep the file private.
 
-   The REST API only accepts HMAC keys, so with an ES256 key the clients can't look up your client IDs or instruments. Pass each client ID with `--client-id` (repeat it for more than one). A personal key's session can only trade for that user's own client.
+   For REST calls, the clients sign `{key_id}.{timestamp}` and exchange it at `POST /v1/auth/api-key/token` for a JWT, which they send as `Authorization: Bearer`. They mint a new one shortly before it expires. The auth API is `https://api.dev.truemarkets.co`, `https://api.uat.truemarkets.co` or `https://api.truemarkets.co` depending on `--env`. Set `TRUEX_AUTH_URL` to override it (required for `--env local`).
+
+   The REST API only accepts JWTs that carry a client, so this works for personal keys. Organization keys can still log on to FIX, but their REST calls are rejected. For those, pass each client ID with `--client-id` (repeat it for more than one); `--client-id` also skips the REST client lookup for any key. A personal key's session can only trade for that user's own client.
 
    **HMAC key (legacy, being phased out).** Set these environment variables. They are used when no key file is given:
    - `TRUEX_KEY_ID`: API key ID for authentication.
@@ -74,7 +76,7 @@ python download_spec.py
 Use the following command to start the FIX client:
 
 ```
-python fix_client.py --env ENV [--key-file KEY_FILE --client-id CLIENT_ID]
+python fix_client.py --env ENV [--key-file KEY_FILE] [--client-id CLIENT_ID]
 ```
 
 Replace `ENV` with the environment you want to run the client in (`dev`, `uat`, or `prod`).
@@ -86,10 +88,10 @@ The repository also contains `dropcopy_client.py`, a lightweight program focused
 python dropcopy_client.py --env dev
 ```
 
-Authenticate with an ES256 key file (`--key-file` plus `--client-id`), or set `TRUEX_KEY_ID` and `TRUEX_KEY_SECRET` for an HMAC key:
+Authenticate with an ES256 key file (`--key-file`), or set `TRUEX_KEY_ID` and `TRUEX_KEY_SECRET` for an HMAC key:
 
 ```
-python dropcopy_client.py --env dev --key-file ~/Downloads/truemarkets-api-key-6c951334.json --client-id 1234
+python dropcopy_client.py --env dev --key-file ~/Downloads/truemarkets-api-key-6c951334.json
 ```
 
 ### Available Commands
@@ -165,7 +167,7 @@ Interact with the script using the following commands in the CLI:
 ## Security Features
 
 - **ES256 Signatures**:
-  FIX logons with a web UI key file are signed with the ECDSA P-256 private key, which never leaves your machine.
+  FIX logons and auth API token requests with a web UI key file are signed with the ECDSA P-256 private key, which never leaves your machine. REST calls carry the short-lived JWT.
 
 - **HMAC-SHA-256 Signatures**:
   With a legacy HMAC key, FIX logons and REST requests are signed using the `TRUEX_KEY_SECRET`.

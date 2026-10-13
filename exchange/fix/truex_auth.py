@@ -12,6 +12,10 @@ Two kinds of API key are accepted at logon (35=A):
 
 Both sign the same message:
     SendingTime + MsgType + MsgSeqNum + SenderCompID + TargetCompID + Username
+
+The REST API takes an HMAC signature per request for HMAC keys. For ES256 keys
+it takes a JWT bearer token, minted by the auth API at
+POST /v1/auth/api-key/token from an ES256 signature of "{key_id}.{timestamp}".
 """
 
 from __future__ import annotations
@@ -21,13 +25,33 @@ import hashlib
 import hmac
 import json
 import os
+import time
 from typing import Optional
+
+import requests
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 P256_COORD_LEN = 32
+
+AUTH_API_URLS = {
+    "dev": "https://api.dev.truemarkets.co",
+    "uat": "https://api.uat.truemarkets.co",
+    "prod": "https://api.truemarkets.co",
+}
+
+# Mint a new token this long before the current one expires.
+TOKEN_REFRESH_MARGIN_SECS = 60
+
+
+def auth_api_url(env: str) -> str:
+    """Auth API base URL for env; TRUEX_AUTH_URL overrides it (required for local)."""
+    url = os.getenv("TRUEX_AUTH_URL") or AUTH_API_URLS.get(env)
+    if not url:
+        raise ValueError(f"No auth API URL for env '{env}': set TRUEX_AUTH_URL")
+    return url.rstrip("/")
 
 
 def _b64url_decode(value: str) -> bytes:
@@ -61,6 +85,8 @@ class LogonSigner:
         self.key_id = key_id
         self.hmac_secret = hmac_secret
         self.private_key = private_key
+        self._access_token: Optional[str] = None
+        self._access_token_exp = 0.0
 
     @property
     def algorithm(self) -> str:
@@ -135,6 +161,39 @@ class LogonSigner:
         raw = r.to_bytes(P256_COORD_LEN, "big") + s.to_bytes(P256_COORD_LEN, "big")
         return _b64url_encode(raw)
 
+    def access_token(self, env: str) -> str:
+        """
+        Return a JWT for REST calls, minting one from the auth API when there is
+        none or it is about to expire. ES256 keys only.
+        """
+        if self.private_key is None:
+            raise ValueError("JWT access tokens require an ES256 key")
+        if self._access_token and time.time() < self._access_token_exp - TOKEN_REFRESH_MARGIN_SECS:
+            return self._access_token
+
+        timestamp = int(time.time())
+        url = f"{auth_api_url(env)}/v1/auth/api-key/token"
+        body = {
+            "key_id": self.key_id,
+            "timestamp": timestamp,
+            "signature": self.sign(f"{self.key_id}.{timestamp}"),
+        }
+        try:
+            response = requests.post(url, json=body, timeout=10)
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Token request to {url} failed: {exc}") from exc
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Token request to {url} failed with {response.status_code}: {response.text}"
+            )
+
+        token = response.json().get("access_token")
+        if not token:
+            raise RuntimeError(f"Token response from {url} has no access_token")
+        self._access_token = token
+        self._access_token_exp = _jwt_expiry(token)
+        return token
+
     def logon_password(
         self, sending_time, msg_type, msg_seq_num, sender_comp_id, target_comp_id
     ) -> str:
@@ -148,3 +207,12 @@ class LogonSigner:
                 self.key_id,
             )
         )
+
+
+def _jwt_expiry(token: str) -> float:
+    """The token's exp claim, or a conservative 5 minutes if it can't be read."""
+    try:
+        claims = json.loads(_b64url_decode(token.split(".")[1]))
+        return float(claims["exp"])
+    except (IndexError, KeyError, TypeError, ValueError):
+        return time.time() + 300

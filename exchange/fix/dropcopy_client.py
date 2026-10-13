@@ -40,8 +40,7 @@ ANSI_CLEAR = "\033[2J\033[H"
 
 def query_rest(
     env: str,
-    api_key_id: str,
-    api_key_secret: str,
+    signer: LogonSigner,
     method: str,
     path: str,
     body: Optional[dict] = None,
@@ -69,23 +68,30 @@ def query_rest(
     url = base_url + path
 
     method_upper = method.upper()
-    timestamp = str(int(time.time()))
-    parsed = urlparse(url)
-    payload = timestamp + method_upper + parsed.path
+    if signer.is_hmac:
+        timestamp = str(int(time.time()))
+        parsed = urlparse(url)
+        payload = timestamp + method_upper + parsed.path
 
-    digest = hmac.new(
-        api_key_secret.encode("utf-8"),
-        payload.encode("utf-8"),
-        hashlib.sha256,
-    ).digest()
-    signature = base64.b64encode(digest).decode("utf-8")
+        digest = hmac.new(
+            signer.hmac_secret.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+        signature = base64.b64encode(digest).decode("utf-8")
 
-    headers = {
-        "x-truex-auth-timestamp": timestamp,
-        "x-truex-auth-signature": signature,
-        "x-truex-auth-token": api_key_id,
-        "Content-Type": "application/json",
-    }
+        headers = {
+            "x-truex-auth-timestamp": timestamp,
+            "x-truex-auth-signature": signature,
+            "x-truex-auth-token": signer.key_id,
+            "Content-Type": "application/json",
+        }
+    else:
+        # ES256 keys authenticate with a JWT minted by the auth API
+        headers = {
+            "Authorization": f"Bearer {signer.access_token(env)}",
+            "Content-Type": "application/json",
+        }
 
     try:
         if method_upper == "GET":
@@ -112,11 +118,11 @@ def query_rest(
         raise RuntimeError("REST response was not valid JSON") from exc
 
 
-def get_client_ids(env: str, mnemonic: str, api_key_id: str, api_key_secret: str) -> Tuple[str, ...]:
+def get_client_ids(env: str, mnemonic: str, signer: LogonSigner) -> Tuple[str, ...]:
     """Fetch client IDs associated with the API key."""
 
     query = "/api/v1/client" if mnemonic is None else f"/api/v1/client?mnemonic={mnemonic}"
-    response = query_rest(env, api_key_id, api_key_secret, "GET", query)
+    response = query_rest(env, signer, "GET", query)
     if not isinstance(response, list):
         raise RuntimeError("Unexpected client list response from REST API")
 
@@ -652,8 +658,8 @@ def parse_args() -> argparse.Namespace:
         "--client-id",
         action="append",
         default=[],
-        help="Client ID to subscribe for; repeat for more. Required with an ES256 "
-        "key, since client lookup over REST needs an HMAC key.",
+        help="Client ID to subscribe for; repeat for more. Defaults to the clients "
+        "the REST API returns for the key.",
     )
     parser.add_argument(
         "--config",
@@ -694,17 +700,12 @@ def main() -> None:
 
     if args.client_id:
         client_ids = tuple(args.client_id)
-    elif signer.is_hmac:
+    else:
         try:
-            client_ids = get_client_ids(
-                args.env, args.mnemonic, signer.key_id, signer.hmac_secret
-            )
-        except RuntimeError as exc:
+            client_ids = get_client_ids(args.env, args.mnemonic, signer)
+        except (RuntimeError, ValueError) as exc:
             print(f"Failed to fetch client IDs: {exc}")
             sys.exit(1)
-    else:
-        print("--client-id is required with an ES256 key; REST client lookup needs an HMAC key.")
-        sys.exit(1)
 
     print(f"Using {len(client_ids)} client IDs for drop copy subscription")
 
