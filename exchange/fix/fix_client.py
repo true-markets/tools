@@ -20,7 +20,7 @@ import re
 from datetime import datetime
 from urllib.parse import urlparse
 
-from truex_auth import LogonSigner
+from truex_auth import LogonSigner, cefi_api_url
 
 fix_stop_event = threading.Event()
 
@@ -33,19 +33,11 @@ def QueryRest(ctx, method, path, body = None):
     HEADER_AUTH_SIGNATURE = "x-truex-auth-signature"
     HEADER_AUTH_TOKEN = "x-truex-auth-token"
 
-    url = ""
-    if ctx.env == "local":
-        host = os.getenv("TRUEX_HOST")
-        port = os.getenv("TRUEX_REST_PORT")
-        url = f"http://{host}:{port}"
-    elif ctx.env == "dev":
-        url = "http://dev1.truex.co:9742"
-    elif ctx.env == "uat":
-        url = "http://uat1.truex.co:9742"
-    elif ctx.env == "prod":
-        url = "https://prod.truex.co"
-
-    url += path
+    try:
+        url = cefi_api_url(ctx.env) + path
+    except ValueError as e:
+        ctx.message_queue.put(f"REST {method} {path} failed: {e}")
+        return None
 
     if ctx.signer.is_hmac:
         # Prepare the current timestamp and method
@@ -106,7 +98,7 @@ def QueryRest(ctx, method, path, body = None):
     return response.json()
 
 def GetInstrumentIds(ctx):
-    response = QueryRest(ctx, "get", "/api/v1/instrument")
+    response = QueryRest(ctx, "get", "/v1/cefi/instruments")
 
     # Loop through each entry in the response data
     if not isinstance(response, list):
@@ -120,7 +112,7 @@ def GetInstrumentIds(ctx):
     return instruments
 
 def GetClientIds(ctx):
-    response = QueryRest(ctx, "get", "/api/v1/client")
+    response = QueryRest(ctx, "get", "/v1/cefi/clients")
 
     matching_ids = []
     # Loop through each entry in the response data
@@ -139,7 +131,7 @@ def GetClientIds(ctx):
 
 def GetOrders(ctx):
     # Perform the GET request (or other HTTP methods as necessary)
-    response = QueryRest(ctx, "get", "/api/v1/order/active")
+    response = QueryRest(ctx, "get", "/v1/cefi/orders/active")
 
     if isinstance(response, list) and len(response) > 0:
         i = 0

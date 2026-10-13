@@ -42,8 +42,29 @@ AUTH_API_URLS = {
     "prod": "https://api.truemarkets.co",
 }
 
+# TrueX CeFi REST API (RAG, behind envoy), serving /v1/cefi/...
+CEFI_API_URLS = {
+    "dev": "https://api.dev.truex.co",
+    "uat": "https://api.uat.truex.co",
+    "prod": "https://api.truex.co",
+}
+
 # Mint a new token this long before the current one expires.
 TOKEN_REFRESH_MARGIN_SECS = 60
+
+
+def cefi_api_url(env: str) -> str:
+    """CeFi REST API base URL for env; local uses TRUEX_HOST and TRUEX_REST_PORT."""
+    if env == "local":
+        host = os.getenv("TRUEX_HOST")
+        port = os.getenv("TRUEX_REST_PORT")
+        if not host or not port:
+            raise ValueError("TRUEX_HOST and TRUEX_REST_PORT must be set for local REST access")
+        return f"http://{host}:{port}"
+    url = CEFI_API_URLS.get(env)
+    if not url:
+        raise ValueError(f"No CeFi API URL for env '{env}'")
+    return url
 
 
 def auth_api_url(env: str) -> str:

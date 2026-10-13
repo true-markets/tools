@@ -45,6 +45,8 @@ python fix_client.py --env dev --key-file ~/Downloads/truemarkets-api-key-6c9513
 
    For REST calls, the clients sign `{key_id}.{timestamp}` and exchange it at `POST /v1/auth/api-key/token` for a JWT, which they send as `Authorization: Bearer`. They mint a new one shortly before it expires. The auth API is `https://api.dev.truemarkets.co`, `https://api.uat.truemarkets.co` or `https://api.truemarkets.co` depending on `--env`. Set `TRUEX_AUTH_URL` to override it (required for `--env local`).
 
+   REST calls go to the TrueX CeFi API (`/v1/cefi/...`) at `https://api.dev.truex.co`, `https://api.uat.truex.co` or `https://api.truex.co`, or `TRUEX_HOST`:`TRUEX_REST_PORT` for `--env local`.
+
    The REST API only accepts JWTs that carry a client, so this works for personal keys. Organization keys can still log on to FIX, but their REST calls are rejected. For those, pass each client ID with `--client-id` (repeat it for more than one); `--client-id` also skips the REST client lookup for any key. A personal key's session can only trade for that user's own client.
 
    **HMAC key (legacy, being phased out).** Set these environment variables. They are used when no key file is given:

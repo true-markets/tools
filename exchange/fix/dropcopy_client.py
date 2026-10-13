@@ -25,7 +25,7 @@ import quickfix as fix
 import quickfix50sp2 as fix50sp2
 import requests
 
-from truex_auth import LogonSigner
+from truex_auth import LogonSigner, cefi_api_url
 
 
 CONFIG_BY_ENV = {
@@ -47,25 +47,7 @@ def query_rest(
 ):
     """Minimal TrueX REST helper replicating the trading client logic."""
 
-    def base_url_for_env(environment: str) -> str:
-        if environment == "local":
-            host = os.getenv("TRUEX_HOST")
-            port = os.getenv("TRUEX_REST_PORT")
-            if not host or not port:
-                raise RuntimeError(
-                    "TRUEX_HOST and TRUEX_REST_PORT must be set for local REST access"
-                )
-            return f"http://{host}:{port}"
-        if environment == "dev":
-            return "http://dev1.truex.co:9742"
-        if environment == "uat":
-            return "http://uat1.truex.co:9742"
-        if environment == "prod":
-            return "https://prod.truex.co"
-        raise RuntimeError(f"Unsupported environment '{environment}' for REST base URL")
-
-    base_url = base_url_for_env(env)
-    url = base_url + path
+    url = cefi_api_url(env) + path
 
     method_upper = method.upper()
     if signer.is_hmac:
@@ -121,7 +103,7 @@ def query_rest(
 def get_client_ids(env: str, mnemonic: str, signer: LogonSigner) -> Tuple[str, ...]:
     """Fetch client IDs associated with the API key."""
 
-    query = "/api/v1/client" if mnemonic is None else f"/api/v1/client?mnemonic={mnemonic}"
+    query = "/v1/cefi/clients" if mnemonic is None else f"/v1/cefi/clients?mnemonic={mnemonic}"
     response = query_rest(env, signer, "GET", query)
     if not isinstance(response, list):
         raise RuntimeError("Unexpected client list response from REST API")
